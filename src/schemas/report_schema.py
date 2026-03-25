@@ -128,10 +128,8 @@ class AnalysisReportSchema(BaseModel):
     Aligns with SYSTEM_PROMPT output format.
     """
 
-    model_config = ConfigDict(extra="allow")  # Allow extra fields from LLM
-
     stock_name: Optional[str] = None
-    sentiment_score: Optional[int] = Field(None, ge=0, le=100)
+    sentiment_score: Optional[int] = None
     trend_prediction: Optional[str] = None
     operation_advice: Optional[str] = None
     decision_type: Optional[str] = None
