@@ -35,37 +35,37 @@ class TrendStatus(BaseModel):
 
     ma_alignment: Optional[str] = None
     is_bullish: Optional[bool] = None
-    trend_score: Optional[Union[int, float, str]] = None
+    trend_score: Optional[str] = None
 
 
 class PricePosition(BaseModel):
     """Price position (may contain N/A strings)."""
 
-    current_price: Optional[Union[int, float, str]] = None
-    ma5: Optional[Union[int, float, str]] = None
-    ma10: Optional[Union[int, float, str]] = None
-    ma20: Optional[Union[int, float, str]] = None
-    bias_ma5: Optional[Union[int, float, str]] = None
+    current_price: Optional[str] = None
+    ma5: Optional[str] = None
+    ma10: Optional[str] = None
+    ma20: Optional[str] = None
+    bias_ma5: Optional[str] = None
     bias_status: Optional[str] = None
-    support_level: Optional[Union[int, float, str]] = None
-    resistance_level: Optional[Union[int, float, str]] = None
+    support_level: Optional[str] = None
+    resistance_level: Optional[str] = None
 
 
 class VolumeAnalysis(BaseModel):
     """Volume analysis."""
 
-    volume_ratio: Optional[Union[int, float, str]] = None
+    volume_ratio: Optional[str] = None
     volume_status: Optional[str] = None
-    turnover_rate: Optional[Union[int, float, str]] = None
+    turnover_rate: Optional[str] = None
     volume_meaning: Optional[str] = None
 
 
 class ChipStructure(BaseModel):
     """Chip structure."""
 
-    profit_ratio: Optional[Union[int, float, str]] = None
-    avg_cost: Optional[Union[int, float, str]] = None
-    concentration: Optional[Union[int, float, str]] = None
+    profit_ratio: Optional[str] = None
+    avg_cost: Optional[str] = None
+    concentration: Optional[str] = None
     chip_health: Optional[str] = None
 
 
@@ -91,10 +91,10 @@ class Intelligence(BaseModel):
 class SniperPoints(BaseModel):
     """Sniper points (ideal_buy, stop_loss, etc.)."""
 
-    ideal_buy: Optional[Union[str, int, float]] = None
-    secondary_buy: Optional[Union[str, int, float]] = None
-    stop_loss: Optional[Union[str, int, float]] = None
-    take_profit: Optional[Union[str, int, float]] = None
+    ideal_buy: Optional[str] = None
+    secondary_buy: Optional[str] = None
+    stop_loss: Optional[str] = None
+    take_profit: Optional[str] = None
 
 
 class PositionStrategy(BaseModel):
