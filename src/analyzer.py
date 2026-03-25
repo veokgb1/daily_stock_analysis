@@ -509,7 +509,7 @@ class GeminiAnalyzer:
 
 ## 输出格式：决策仪表盘 JSON
 
-请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
+请严格按照以下 JSON 格式输出（如果没有数据的字段，可以为 null 或省略，切勿编造），这是一个完整的【决策仪表盘】：
 
 ```json
 {
@@ -659,7 +659,7 @@ class GeminiAnalyzer:
 
 ## 输出格式：决策仪表盘 JSON
 
-请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
+请严格按照以下 JSON 格式输出（如果没有数据的字段，可以为 null 或省略，切勿编造），这是一个完整的【决策仪表盘】：
 
 ```json
 {
@@ -1039,7 +1039,8 @@ class GeminiAnalyzer:
                     "max_tokens": max_tokens,
                 }
                 extra = get_thinking_extra_body(model_short)
-                if extra:
+                THINKING_COMPATIBLE_MODELS = ("deepseek", "claude", "anthropic")
+                if extra and any(kw in model.lower() for kw in THINKING_COMPATIBLE_MODELS):
                     call_kwargs["extra_body"] = extra
 
                 _router_model_names = set(get_configured_llm_models(config.llm_model_list))
@@ -1818,11 +1819,18 @@ class GeminiAnalyzer:
                     op = data.get('operation_advice', 'Hold' if report_language == "en" else '持有')
                     decision_type = infer_decision_type_from_advice(op, default='hold')
                 
+                # 安全转换分数，防止 LLM 返回 "N/A" 导致 int() 崩溃
+                raw_score = data.get('sentiment_score', 50)
+                try:
+                    safe_score = max(0, min(100, int(float(str(raw_score)))))
+                except (TypeError, ValueError):
+                    safe_score = 50
+
                 return AnalysisResult(
                     code=code,
                     name=name,
                     # 核心指标
-                    sentiment_score=int(data.get('sentiment_score', 50)),
+                    sentiment_score=safe_score,
                     trend_prediction=data.get('trend_prediction', 'Sideways' if report_language == "en" else '震荡'),
                     operation_advice=data.get('operation_advice', 'Hold' if report_language == "en" else '持有'),
                     decision_type=decision_type,

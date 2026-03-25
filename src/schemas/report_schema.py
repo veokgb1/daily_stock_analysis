@@ -129,7 +129,7 @@ class AnalysisReportSchema(BaseModel):
     """
 
     stock_name: Optional[str] = None
-    sentiment_score: Optional[int] = None
+    sentiment_score: Optional[str] = None
     trend_prediction: Optional[str] = None
     operation_advice: Optional[str] = None
     decision_type: Optional[str] = None
