@@ -33,6 +33,11 @@ def enforce_sidebar_password_gate() -> None:
     error_key = "_app_password_error"
     input_key = "_app_password_input"
 
+    if auth_key not in st.session_state:
+        st.session_state[auth_key] = False
+    if error_key not in st.session_state:
+        st.session_state[error_key] = ""
+
     if st.session_state.get(auth_key):
         return
 
@@ -48,7 +53,6 @@ def enforce_sidebar_password_gate() -> None:
             if hmac.compare_digest(submitted, expected_password):
                 st.session_state[auth_key] = True
                 st.session_state[error_key] = ""
-                st.session_state[input_key] = ""
                 st.rerun()
             else:
                 st.session_state[error_key] = "密码不正确，请重试。"
