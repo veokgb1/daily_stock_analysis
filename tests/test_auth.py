@@ -13,6 +13,11 @@ from unittest.mock import patch
 import src.auth as auth
 
 
+TEST_RATE_LIMIT_IP = os.getenv("TEST_RATE_LIMIT_IP", "127.0.0.1")
+TEST_RATE_LIMIT_BLOCK_IP = os.getenv("TEST_RATE_LIMIT_BLOCK_IP", "127.0.0.99")
+TEST_RATE_LIMIT_CLEAR_IP = os.getenv("TEST_RATE_LIMIT_CLEAR_IP", "127.0.0.100")
+
+
 def _reset_auth_globals() -> None:
     """Reset auth module globals for test isolation."""
     auth._auth_enabled = None
@@ -166,16 +171,16 @@ class AuthRateLimitTestCase(unittest.TestCase):
         _reset_auth_globals()
 
     def test_rate_limit_allows_under_limit(self) -> None:
-        self.assertTrue(auth.check_rate_limit("192.168.1.1"))
+        self.assertTrue(auth.check_rate_limit(TEST_RATE_LIMIT_IP))
 
     def test_rate_limit_blocks_after_max_failures(self) -> None:
-        ip = "10.0.0.99"
+        ip = TEST_RATE_LIMIT_BLOCK_IP
         for _ in range(auth.RATE_LIMIT_MAX_FAILURES):
             auth.record_login_failure(ip)
         self.assertFalse(auth.check_rate_limit(ip))
 
     def test_clear_rate_limit_resets_ip(self) -> None:
-        ip = "10.0.0.100"
+        ip = TEST_RATE_LIMIT_CLEAR_IP
         for _ in range(auth.RATE_LIMIT_MAX_FAILURES):
             auth.record_login_failure(ip)
         self.assertFalse(auth.check_rate_limit(ip))

@@ -39,7 +39,7 @@ def _parse_hosts_from_env() -> Optional[List[Tuple[str, int]]]:
     从环境变量构建通达信服务器列表。
 
     优先级：
-    1. PYTDX_SERVERS：逗号分隔 "ip:port,ip:port"（如 "192.168.1.1:7709,10.0.0.1:7709"）
+    1. PYTDX_SERVERS：逗号分隔 "ip:port,ip:port"（如 "gateway-primary:7709,gateway-backup:7709"）
     2. PYTDX_HOST + PYTDX_PORT：单个服务器
     3. 均未配置时返回 None（调用方使用 DEFAULT_HOSTS）
     """

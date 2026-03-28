@@ -1139,7 +1139,9 @@ class GeminiAnalyzer:
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
         
         # 请求前增加延时（防止连续请求触发限流）
-        request_delay = config.gemini_request_delay
+        # Web/批量分析场景优先吞吐，业务层请求前等待压到最低安全值；
+        # 真正的限速交给底层 provider 的重试/退避逻辑处理。
+        request_delay = min(max(float(config.gemini_request_delay), 0.0), 0.2)
         if request_delay > 0:
             logger.debug(f"[LLM] 请求前等待 {request_delay:.1f} 秒...")
             time.sleep(request_delay)

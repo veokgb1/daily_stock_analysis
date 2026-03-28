@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import random
 import re
 import threading
 import time
@@ -50,10 +51,11 @@ _SEARCH_TRANSIENT_EXCEPTIONS = (
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=1.5),
     retry=retry_if_exception_type(_SEARCH_TRANSIENT_EXCEPTIONS),
     before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
 )
 def _post_with_retry(url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: int) -> requests.Response:
     """POST with retry on transient SSL/network errors."""
@@ -61,8 +63,8 @@ def _post_with_retry(url: str, *, headers: Dict[str, str], json: Dict[str, Any],
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=1.5),
     retry=retry_if_exception_type(_SEARCH_TRANSIENT_EXCEPTIONS),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
@@ -1219,7 +1221,7 @@ class SearXNGSearchProvider(BaseSearchProvider):
     PUBLIC_INSTANCES_CACHE_TTL_SECONDS = 3600
     PUBLIC_INSTANCES_STALE_REFRESH_BACKOFF_SECONDS = 60
     PUBLIC_INSTANCES_POOL_LIMIT = 20
-    PUBLIC_INSTANCES_MAX_ATTEMPTS = 3
+    PUBLIC_INSTANCES_MAX_ATTEMPTS = 2
     PUBLIC_INSTANCES_TIMEOUT_SECONDS = 5
     SELF_HOSTED_TIMEOUT_SECONDS = 10
 
@@ -1538,7 +1540,7 @@ class SearXNGSearchProvider(BaseSearchProvider):
         if self._base_urls:
             candidates = self._rotate_candidates(
                 self._base_urls,
-                max_attempts=len(self._base_urls),
+                max_attempts=min(len(self._base_urls), 2),
             )
             retry_enabled = True
             timeout = self.SELF_HOSTED_TIMEOUT_SECONDS
@@ -1592,6 +1594,12 @@ class SearXNGSearchProvider(BaseSearchProvider):
 
             errors.append(f"{base_url}: {response.error_message or '未知错误'}")
             logger.warning("[%s] 实例 %s 搜索失败: %s", self.name, base_url, response.error_message)
+            if any(
+                token in (response.error_message or "")
+                for token in ("429", "403", "请求超时", "Too Many Requests", "Forbidden")
+            ):
+                logger.warning("[%s] 命中限流/拒绝/超时，快速失败，不再继续轮询更多实例", self.name)
+                break
 
         elapsed = time.time() - start_time
         return SearchResponse(
@@ -2258,6 +2266,8 @@ class SearchService:
 
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
+        if is_index_etf:
+            max_searches = min(max_searches, 2)
 
         if is_foreign:
             search_dimensions = [
@@ -2426,9 +2436,19 @@ class SearchService:
                 )
             else:
                 logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
-            
-            # 短暂延迟避免请求过快
-            time.sleep(0.5)
+
+            # ETF/指数类标的若第一轮就无有效结果，快速结束，避免无意义的后续轮询。
+            if is_index_etf and search_count == 1 and not filtered_response.results:
+                logger.info(
+                    "[情报搜索] %s(%s) 首轮无有效新闻，触发 ETF 快速失败，提前结束后续搜索",
+                    stock_name,
+                    stock_code,
+                )
+                break
+
+            # 恢复礼貌延迟，优先避免触发资讯源/WAF 的全局封禁。
+            if search_count < max_searches:
+                time.sleep(random.uniform(0.5, 0.9))
         
         return results
     

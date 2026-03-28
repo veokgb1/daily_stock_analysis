@@ -472,7 +472,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "PYTDX_SERVERS": {
         "title": "Pytdx Servers",
-        "description": "Comma-separated ip:port (e.g. 192.168.1.1:7709,10.0.0.1:7709). Overrides PYTDX_HOST+PYTDX_PORT.",
+        "description": "Comma-separated ip:port (e.g. gateway-primary:7709,gateway-backup:7709). Overrides PYTDX_HOST+PYTDX_PORT.",
         "category": "data_source",
         "data_type": "string",
         "ui_control": "text",

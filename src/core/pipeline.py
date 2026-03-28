@@ -317,12 +317,14 @@ class StockAnalysisPipeline:
             news_context = None
             if self.search_service.is_available:
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
+                is_index_etf = SearchService.is_index_or_etf(code, stock_name)
+                max_searches = 2 if is_index_etf else 3
 
-                # 使用多维度搜索（最多5次搜索）
+                # ETF/指数类标的优先快速失败，普通个股也压缩到 3 轮以内，降低被 WAF 命中的概率。
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=code,
                     stock_name=stock_name,
-                    max_searches=5
+                    max_searches=max_searches
                 )
 
                 # 格式化情报报告

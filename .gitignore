@@ -78,3 +78,14 @@ verify_*.py
 static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
+
+# backup hardening: exclude docs/text artifacts from this backup branch
+*.md
+*.txt
+!requirements.txt
+!README_V4.md
+
+# backup hardening: keep root databases out of git even if explicit add is attempted
+/*.db
+/*.sqlite
+/*.sqlite3
