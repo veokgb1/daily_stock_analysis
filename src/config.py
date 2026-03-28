@@ -26,7 +26,15 @@ from src.report_language import (
 )
 
 logger = logging.getLogger(__name__)
-_STREAMLIT_SECRET_KEYS = ("GEMINI_API_KEY", "GATEWAY_IP", "APP_PASSWORD")
+_STREAMLIT_SECRET_KEYS = (
+    "GEMINI_API_KEY",
+    "GATEWAY_IP",
+    "APP_PASSWORD",
+    "DATABASE_PATH",
+    "HISTORY_DATABASE_PATH",
+    "MODEL_VERSION",
+    "PROXY_PORT",
+)
 _LOCAL_PROXY_GATEWAY = "10.10.10.252"
 
 

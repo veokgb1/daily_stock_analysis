@@ -11,8 +11,10 @@ webui/db.py  v2
 """
 
 import json
+import shutil
 import sqlite3
 import logging
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +22,9 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-_DB_PATH = Path(__file__).parent.parent / "stock_history.db"
+_ROOT_DIR = Path(__file__).parent.parent
+_LEGACY_DB_PATH = _ROOT_DIR / "stock_history.db"
+_DEFAULT_DB_PATH = _ROOT_DIR / "data" / "history_data.db"
 _DB_MAINTENANCE_MARKER = Path(__file__).parent.parent / "data" / ".db_maintenance.json"
 _SNAPSHOT_FACTOR_COLUMNS = [
     ("trend_prediction", "TEXT"),
@@ -40,12 +44,39 @@ _SNAPSHOT_FACTOR_COLUMNS = [
 ]
 
 
+def _resolve_db_path() -> Path:
+    configured = (
+        os.getenv("HISTORY_DATABASE_PATH")
+        or os.getenv("DATABASE_PATH")
+        or ""
+    ).strip()
+    if configured:
+        return Path(configured)
+
+    if _DEFAULT_DB_PATH.exists():
+        return _DEFAULT_DB_PATH
+    if _LEGACY_DB_PATH.exists():
+        _DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(_LEGACY_DB_PATH, _DEFAULT_DB_PATH)
+            logger.info("历史数据库已迁移到: %s", _DEFAULT_DB_PATH)
+            return _DEFAULT_DB_PATH
+        except Exception as exc:
+            logger.warning("历史数据库迁移失败，继续使用旧路径: %s", exc)
+            return _LEGACY_DB_PATH
+    return _DEFAULT_DB_PATH
+
+
+_DB_PATH = _resolve_db_path()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 连接上下文
 # ─────────────────────────────────────────────────────────────────────────────
 
 @contextmanager
 def _get_conn():
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -130,6 +161,18 @@ def init_db() -> None:
             code       TEXT    NOT NULL UNIQUE,
             name       TEXT    NOT NULL,
             added_at   TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS run_artifacts (
+            run_id             TEXT PRIMARY KEY,
+            created_at         TEXT NOT NULL,
+            run_mode           TEXT DEFAULT '',
+            market_report_md   TEXT DEFAULT '',
+            stock_report_md    TEXT DEFAULT '',
+            full_report_md     TEXT DEFAULT '',
+            business_log       TEXT DEFAULT '',
+            debug_log          TEXT DEFAULT '',
+            schema_json        TEXT DEFAULT '{}'
         );
 
         CREATE INDEX IF NOT EXISTS idx_quick_pool_added
@@ -529,6 +572,60 @@ def get_code_history(code: str, limit: Optional[int] = None) -> List[Dict[str, A
     with _get_conn() as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
+
+
+def save_run_artifacts(
+    run_id: str,
+    *,
+    run_mode: str = "",
+    market_report_md: str = "",
+    stock_report_md: str = "",
+    full_report_md: str = "",
+    business_log: str = "",
+    debug_log: str = "",
+    schema_json: str = "{}",
+    created_at: Optional[str] = None,
+) -> None:
+    now = created_at or _now_iso()
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO run_artifacts (
+                run_id, created_at, run_mode, market_report_md, stock_report_md,
+                full_report_md, business_log, debug_log, schema_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                created_at       = excluded.created_at,
+                run_mode         = excluded.run_mode,
+                market_report_md = excluded.market_report_md,
+                stock_report_md  = excluded.stock_report_md,
+                full_report_md   = excluded.full_report_md,
+                business_log     = excluded.business_log,
+                debug_log        = excluded.debug_log,
+                schema_json      = excluded.schema_json
+            """,
+            (
+                run_id,
+                now,
+                run_mode,
+                market_report_md,
+                stock_report_md,
+                full_report_md,
+                business_log,
+                debug_log,
+                schema_json,
+            ),
+        )
+
+
+def get_run_artifacts(run_id: str) -> Optional[Dict[str, Any]]:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM run_artifacts WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_snapshot_detail(snapshot_id: int) -> Optional[Dict[str, Any]]:

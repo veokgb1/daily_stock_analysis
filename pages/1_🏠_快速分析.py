@@ -15,6 +15,7 @@ pages/1_🏠_快速分析.py  V5-Pro · 纯血 Gemini 底盘 · 双风格布局�
   · 浅色模式背景 `#F5F3EE`（护眼奶白）
 """
 
+import json
 import os, sys, re, time, uuid, logging, queue, threading
 from collections import deque
 from contextlib import nullcontext
@@ -46,7 +47,7 @@ from data_provider.base import canonical_stock_code
 from webui.db import (
     add_to_watchlist, init_db, save_snapshot, save_strategy_group,
     list_strategy_groups, get_strategy_group, delete_strategy_group,
-    list_watchlist, list_quick_pool, clear_quick_pool,
+    list_watchlist, list_quick_pool, clear_quick_pool, save_run_artifacts,
 )
 from webui.factor_extractor import extract_factors, enrich_from_md
 from webui.fuzzy_matcher import suggest_stock_candidates
@@ -604,6 +605,8 @@ def _searchbox_search(searchterm: str, market: str = "A") -> list:
     q = (searchterm or "").strip()
     st.session_state["iw_searchbox_result_count"] = 0
     st.session_state["iw_searchbox_single_exact"] = False
+    if not _catalog.is_search_ready(market):
+        return []
     if not q:
         return []
 
@@ -1089,6 +1092,18 @@ def _wizard_body_searchbox() -> None:
                 label_visibility="collapsed",
                 disabled=True,
             )
+        elif not _catalog.is_search_ready(market):
+            with st.spinner("正在载入本地股票雷达快照..."):
+                st.text_input(
+                    "iw_input_loading",
+                    value="",
+                    placeholder="正在载入本地股票雷达快照...",
+                    key="iw_searchbox_loading",
+                    label_visibility="collapsed",
+                    disabled=True,
+                )
+            if _catalog.error(market):
+                st.warning(_catalog.error(market))
         else:
             _iw_key = f"iw_search_{st.session_state.get('iw_input_gen', 0)}"
             st_searchbox(
@@ -1297,6 +1312,44 @@ def _read_physical_log(log_prefix: str, debug: bool = False, lines: int = 1000):
         return path, b"", ""
     tail = "".join(tail_lines)
     return path, tail.encode("utf-8"), tail
+
+
+def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
+    if not run_id:
+        return
+
+    try:
+        per_reports = st.session_state.get("per_stock_reports", {}) or {}
+        stock_report_md = "\n\n---\n\n".join(
+            f"# {code} {st.session_state.pool_names.get(code, code)}\n\n{report_md}"
+            for code, report_md in per_reports.items()
+            if report_md
+        )
+        _, _, business_log_tail = _read_physical_log("stock_analysis", debug=False)
+        _, _, debug_log_tail = _read_physical_log("stock_analysis", debug=True)
+        schema_payload = {
+            "run_id": run_id,
+            "run_mode": run_mode,
+            "run_ts": st.session_state.get("run_ts", ""),
+            "snapshot_ids": st.session_state.get("snapshot_ids", {}),
+            "snapshot_factors": st.session_state.get("snapshot_factors", {}),
+            "analysis_results": [
+                result.model_dump() if hasattr(result, "model_dump") else vars(result)
+                for result in st.session_state.get("analysis_results", []) or []
+            ],
+        }
+        save_run_artifacts(
+            run_id,
+            run_mode=run_mode,
+            market_report_md=st.session_state.get("market_report", "") or "",
+            stock_report_md=stock_report_md,
+            full_report_md=st.session_state.get("analysis_report", "") or "",
+            business_log=business_log_tail or "",
+            debug_log=debug_log_tail or "",
+            schema_json=json.dumps(schema_payload, ensure_ascii=False, indent=2),
+        )
+    except Exception as exc:
+        logger.warning("save_run_artifacts:%s", exc)
 def _get_rt():
     from src.enums import ReportType
     cfg=get_config()
@@ -2723,6 +2776,7 @@ if st.session_state.is_running and st.session_state.run_requested:
             else:
                 _sc.update(label=f"✅ 分析全部完成，总耗时 {_el:.1f}s",
                            state="complete",expanded=False)
+            _persist_run_artifacts(_run_id, _mode)
         except Exception as _exc:
             logger.exception(f"椤跺眰寮傚父:{_exc}")
             st.session_state.last_error=str(_exc)
