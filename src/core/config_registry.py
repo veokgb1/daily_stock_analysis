@@ -83,7 +83,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     # ------------------------------------------------------------------
     "LITELLM_MODEL": {
         "title": "Primary Model (LiteLLM)",
-        "description": "Unified primary model in provider/model format (e.g. gemini/gemini-3-flash-preview, openai/deepseek-chat, anthropic/claude-3-5-sonnet-20241022). If empty, auto-inferred from available API keys.",
+        "description": "Unified primary model in provider/model format (e.g. gemini/gemini-2.5-flash, openai/deepseek-chat, anthropic/claude-3-5-sonnet-20241022). If empty, auto-inferred from available API keys.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -521,7 +521,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "gemini-3-flash-preview",
+        "default_value": "gemini-2.5-flash",
         "options": [],
         "validation": {},
         "display_order": 20,

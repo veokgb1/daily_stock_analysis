@@ -19,6 +19,7 @@ from src.config import setup_env
 setup_env()
 
 import streamlit as st
+from src.streamlit_guard import enforce_sidebar_password_gate
 
 from src.notification import NotificationService
 from src.services.stock_service import StockService
@@ -38,10 +39,11 @@ except Exception:
 init_db()
 
 st.set_page_config(
-    page_title="标的跟踪池 · A股智能分析站",
+    page_title="标的跟踪池 · DUKA Stock Analysis Engine V5-Pro",
     page_icon="📈",
     layout="wide",
 )
+enforce_sidebar_password_gate()
 
 _STATUS_LABELS: Dict[str, str] = {
     "normal": "⚪ 监控中",

@@ -1,32 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-webui/stock_catalog.py  v1.0
+webui/stock_catalog.py  v2.0
 ==============================
 纯内存股票目录 ── Input Wizard 的搜索后端
 
 设计原则
-  · 零 SQLite 写入，数据库保持绝对干净
-  · 启动立即可用：同步加载本地 STOCK_NAME_MAP 种子（< 50ms）
-  · 后台并发：三条守护线程分别拉取 A / HK / US 全量数据
-  · 零延迟搜索：所有匹配在内存字典 + 预计算拼音首字母索引中进行
+  · 启动快：优先读取 data/stock_snapshot.pkl（兼容 data/stock_catalog.pkl）
+  · 常驻快：目录实例挂在 Streamlit @st.cache_resource，进程不关就不重复读盘
+  · 更新轻：A 股快照每日最多后台检查一次，发现新代码后静默覆盖快照
+  · 零阻塞：前台始终使用当前内存中的旧数据，后台联网不阻断搜索
   · 兜底优先：catalog 查不到 ≠ 代码无效，调用方自行决定是否拦截
-
-市场扩展
-  · market 字符串统一为 "A" / "HK" / "US"
-  · 新增市场只需实现 _load_xx() 并在 bootstrap() 里启动线程即可
-
-线程安全
-  · 读写均持 RLock；搜索时 copy 局部引用后立即释放锁
-  · Streamlit @st.cache_resource 友好（同一进程共享单例）
 """
 
 from __future__ import annotations
 
 import logging
+import pickle
 import threading
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_SNAPSHOT_PATH = _DATA_DIR / "stock_snapshot.pkl"
+_LEGACY_SNAPSHOT_PATH = _DATA_DIR / "stock_catalog.pkl"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 拼音首字母（离线计算，不依赖网络）
@@ -77,6 +77,11 @@ class CatalogStore:
         self._codes:        Dict[str, Dict[str, str]]        = {m: {} for m in self.MARKETS}
         self._initials_idx: Dict[str, Dict[str, List[str]]]  = {m: {} for m in self.MARKETS}
         self._status:       Dict[str, str]                   = {m: "idle" for m in self.MARKETS}
+        self._snapshot_path = _SNAPSHOT_PATH
+        self._legacy_snapshot_path = _LEGACY_SNAPSHOT_PATH
+        self._last_refresh_date: Optional[str] = None
+        self._refresh_inflight = False
+        self._notices: Deque[str] = deque()
 
     # ── 私有：构建拼音首字母倒排索引 ─────────────────────────────────────────
 
@@ -89,47 +94,168 @@ class CatalogStore:
                 idx.setdefault(ini, []).append(code)
         self._initials_idx[market] = idx
 
+    def _normalize_code(self, market: str, code: str) -> str:
+        text = str(code or "").strip()
+        if market == "A" and text.isdigit():
+            return text.zfill(6)
+        if market == "HK" and text.isdigit():
+            return text.zfill(5)
+        return text.upper() if market == "US" else text
+
+    def _ensure_snapshot_dir(self) -> None:
+        self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _normalize_snapshot_payload(self, payload: object) -> Dict[str, Dict[str, str]]:
+        normalized: Dict[str, Dict[str, str]] = {m: {} for m in self.MARKETS}
+        if not isinstance(payload, dict):
+            return normalized
+
+        # 兼容旧格式：{"600519": "贵州茅台", ...}
+        if payload and all(isinstance(k, str) and isinstance(v, str) for k, v in payload.items()):
+            normalized["A"] = {
+                self._normalize_code("A", code): str(name).strip()
+                for code, name in payload.items()
+                if str(code).strip() and str(name).strip()
+            }
+            return normalized
+
+        markets_payload = payload.get("markets", payload)
+        if not isinstance(markets_payload, dict):
+            return normalized
+
+        for market, stocks in markets_payload.items():
+            if market not in self.MARKETS or not isinstance(stocks, dict):
+                continue
+            parsed: Dict[str, str] = {}
+            for code, name in stocks.items():
+                code_text = self._normalize_code(market, str(code))
+                name_text = str(name or "").strip()
+                if code_text and name_text:
+                    parsed[code_text] = name_text
+            normalized[market] = parsed
+        return normalized
+
+    def _load_snapshot(self) -> bool:
+        for path in (self._snapshot_path, self._legacy_snapshot_path):
+            if not path.exists():
+                continue
+            try:
+                with path.open("rb") as fh:
+                    payload = pickle.load(fh)
+                markets = self._normalize_snapshot_payload(payload)
+            except Exception as e:
+                logger.warning("[catalog] 快照读取失败 %s：%s", path.name, e)
+                continue
+
+            loaded_markets: List[str] = []
+            with self._lock:
+                for market, stocks in markets.items():
+                    if not stocks:
+                        continue
+                    self._codes[market] = stocks
+                    self._build_initials_index(market)
+                    self._status[market] = "seeded"
+                    loaded_markets.append(f"{market}={len(stocks)}")
+            if loaded_markets:
+                logger.info("[catalog] 快照加载完成 %s：%s", path.name, ", ".join(loaded_markets))
+                if path == self._legacy_snapshot_path:
+                    try:
+                        self._persist_snapshot()
+                        path.unlink(missing_ok=True)
+                    except Exception as e:
+                        logger.warning("[catalog] 旧快照迁移失败 %s：%s", path.name, e)
+                return True
+        logger.info("[catalog] 未发现可用目录快照，等待后台首次同步")
+        return False
+
+    def _snapshot_payload(self) -> Dict[str, object]:
+        with self._lock:
+            markets = {
+                market: dict(stocks)
+                for market, stocks in self._codes.items()
+                if stocks
+            }
+        return {
+            "version": 1,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "markets": markets,
+        }
+
+    def _persist_snapshot(self) -> None:
+        self._ensure_snapshot_dir()
+        payload = self._snapshot_payload()
+        path = self._snapshot_path
+        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+        with tmp_path.open("wb") as fh:
+            pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_path.replace(path)
+
+    def _push_notice(self, message: str) -> None:
+        with self._lock:
+            self._notices.append(message)
+            while len(self._notices) > 8:
+                self._notices.popleft()
+
     # ── 私有：各市场加载函数（后台线程执行）──────────────────────────────────
+
+    def _fetch_a_shares(self) -> Dict[str, str]:
+        stocks: Dict[str, str] = {}
+        import akshare as ak  # type: ignore
+
+        df = ak.stock_info_a_code_name()
+        code_col = next((c for c in ["code", "股票代码", "代码"] if c in df.columns), None)
+        name_col = next((c for c in ["name", "股票简称", "名称"] if c in df.columns), None)
+        if code_col and name_col:
+            for _, row in df.iterrows():
+                code = self._normalize_code("A", str(row[code_col]))
+                name = str(row[name_col]).strip()
+                if code and name:
+                    stocks[code] = name
+        return stocks
 
     def _load_a_shares(self) -> None:
         """
-        A 股加载策略：
-          1. 尝试 akshare.stock_info_a_code_name（全量 ~5500 只，免费无 key）
-          2. 失败 → 已在 bootstrap() 里用本地种子预填，此处静默退出
+        A 股后台静默刷新：
+          1. 联网获取最新 A 股代码列表
+          2. 仅当代码数量或集合发生变化时，覆盖内存并写回快照
+          3. 全程不阻断前台搜索
         """
         with self._lock:
             self._status["A"] = "loading"
-        stocks: Dict[str, str] = {}
-        try:
-            import akshare as ak  # type: ignore
-            df = ak.stock_info_a_code_name()
-            # 兼容多版本列名
-            code_col = next(
-                (c for c in ["code", "股票代码", "代码"] if c in df.columns), None
-            )
-            name_col = next(
-                (c for c in ["name", "股票简称", "名称"] if c in df.columns), None
-            )
-            if code_col and name_col:
-                for _, row in df.iterrows():
-                    code = str(row[code_col]).strip().zfill(6)
-                    name = str(row[name_col]).strip()
-                    if code and name:
-                        stocks[code] = name
-            if stocks:
-                logger.info("[catalog] A股 akshare 热更新完成：%d 只", len(stocks))
-        except Exception as e:
-            logger.warning("[catalog] A股 akshare 加载失败，继续使用本地种子：%s", e)
 
-        if stocks:  # 只在获取到数据时才覆盖（保留种子）
+        try:
+            stocks = self._fetch_a_shares()
+        except Exception as e:
+            logger.warning("[catalog] A股后台更新失败，继续使用内存快照：%s", e)
             with self._lock:
+                self._status["A"] = "ready" if self._codes["A"] else "error"
+                self._refresh_inflight = False
+            return
+
+        if not stocks:
+            with self._lock:
+                self._status["A"] = "ready" if self._codes["A"] else "error"
+                self._refresh_inflight = False
+            return
+
+        changed = False
+        with self._lock:
+            current_codes = self._codes["A"]
+            current_key_set = set(current_codes)
+            fresh_key_set = set(stocks)
+            if len(current_codes) != len(stocks) or current_key_set != fresh_key_set:
                 self._codes["A"] = stocks
                 self._build_initials_index("A")
-                self._status["A"] = "ready"
+                changed = True
+            self._status["A"] = "ready"
+            self._refresh_inflight = False
+
+        if changed:
+            self._persist_snapshot()
+            self._push_notice("股票字典已自动更新至最新版本")
+            logger.info("[catalog] A股快照已更新：%d → %d", len(current_codes), len(stocks))
         else:
-            with self._lock:
-                # 本地种子已在 bootstrap 写入，仅标记状态
-                self._status["A"] = "ready" if self._codes["A"] else "error"
+            logger.info("[catalog] A股快照已是最新：%d 只", len(stocks))
 
     def _load_hk_shares(self) -> None:
         """
@@ -150,7 +276,7 @@ class CatalogStore:
             )
             if code_col and name_col:
                 for _, row in df.iterrows():
-                    code = str(row[code_col]).strip()
+                    code = self._normalize_code("HK", str(row[code_col]))
                     name = str(row[name_col]).strip()
                     if code and name:
                         stocks[code] = name
@@ -183,7 +309,7 @@ class CatalogStore:
             )
             if code_col and name_col:
                 for _, row in df.iterrows():
-                    code = str(row[code_col]).strip()
+                    code = self._normalize_code("US", str(row[code_col]))
                     name = str(row[name_col]).strip()
                     if code and name:
                         stocks[code] = name
@@ -201,32 +327,19 @@ class CatalogStore:
 
     def bootstrap(self) -> None:
         """
-        两阶段启动，保证"立即可用 + 后台更新"：
+        两阶段启动，保证"快照秒开 + 后台静默补全"：
 
-        阶段 1（同步，< 50ms）：
-          从项目内置 STOCK_NAME_MAP 写入 A 股内存字典，
-          并立即构建拼音索引。Input Wizard 在页面完成首次渲染前就已就绪。
+        阶段 1（同步）：
+          优先读取 data/stock_snapshot.pkl；若不存在，再兼容读取 data/stock_catalog.pkl。
 
-        阶段 2（异步，后台守护线程）：
-          并发启动 3 条线程，分别调用 akshare 更新 A / HK / US 全量数据。
-          失败时静默，不阻断主线程，不影响页面加载速度。
+        阶段 2（异步）：
+          港股 / 美股仍在后台加载；A 股是否联网检查由页面按“每日一次”策略触发。
         """
-        # 阶段 1：立即同步种子
-        try:
-            from src.data.stock_mapping import STOCK_NAME_MAP  # type: ignore
-            with self._lock:
-                self._codes["A"] = dict(STOCK_NAME_MAP)
-                self._build_initials_index("A")
-                self._status["A"] = "seeded"
-            logger.info(
-                "[catalog] 本地种子立即加载：%d 只 A股，Input Wizard 已就绪",
-                len(self._codes["A"]),
-            )
-        except Exception as e:
-            logger.warning("[catalog] 本地种子加载失败：%s", e)
+        self._ensure_snapshot_dir()
+        self._load_snapshot()
 
-        # 阶段 2：后台并发热更新
-        for loader in (self._load_a_shares, self._load_hk_shares, self._load_us_shares):
+        # 阶段 2：后台补齐港股 / 美股；A股改为每日一次静默检查
+        for loader in (self._load_hk_shares, self._load_us_shares):
             t = threading.Thread(target=loader, daemon=True, name=f"catalog_{loader.__name__}")
             t.start()
 
@@ -249,12 +362,37 @@ class CatalogStore:
         s = self.status(market)
         n = self.size(market)
         if s in ("seeded", "ready"):
-            return f"🟢 {n:,}只·{'热更新完成' if s == 'ready' else '种子就绪'}"
+            return f"🟢 {n:,}只·{'热更新完成' if s == 'ready' else '快照就绪'}"
         if s == "loading":
             return f"🟡 {n:,}只·加载中…"
         if s == "error":
             return f"🔴 加载失败" if n == 0 else f"🟠 {n:,}只·部分"
         return "⚪ 未加载"
+
+    def schedule_daily_a_refresh(self, today: Optional[str] = None) -> bool:
+        """
+        每个进程每天最多启动一次 A 股后台更新线程。
+        返回 True 表示本次成功触发线程，False 表示已检查过或已有线程在跑。
+        """
+        refresh_date = today or datetime.now().date().isoformat()
+        with self._lock:
+            if self._refresh_inflight or self._last_refresh_date == refresh_date:
+                return False
+            self._last_refresh_date = refresh_date
+            self._refresh_inflight = True
+        t = threading.Thread(
+            target=self._load_a_shares,
+            daemon=True,
+            name="catalog_refresh_a_daily",
+        )
+        t.start()
+        return True
+
+    def consume_notices(self) -> List[str]:
+        with self._lock:
+            notices = list(self._notices)
+            self._notices.clear()
+        return notices
 
     # ── 公共：核心搜索 ────────────────────────────────────────────────────────
 

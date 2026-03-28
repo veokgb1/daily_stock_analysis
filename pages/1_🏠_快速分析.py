@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-pages/1_🏠_快速分析.py  V8 · 纯血 Gemini 底盘 · 双风格布局切换
+pages/1_🏠_快速分析.py  V5-Pro · 纯血 Gemini 底盘 · 双风格布局切换
 ================================================================
 
 布局风格（侧边栏切换）：
@@ -34,8 +34,10 @@ setup_env()
 
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_searchbox import st_searchbox
 
 from src.config import get_config
+from src.streamlit_guard import enforce_sidebar_password_gate
 from src.core.pipeline import StockAnalysisPipeline
 from src.logging_config import setup_logging
 from src.data.stock_mapping import STOCK_NAME_MAP
@@ -68,6 +70,19 @@ def _get_catalog() -> CatalogStore:
     return cat
 
 _catalog: CatalogStore = _get_catalog()
+
+
+def _schedule_catalog_daily_refresh() -> None:
+    today = datetime.now().date().isoformat()
+    if st.session_state.get("last_update_check") == today:
+        return
+    st.session_state["last_update_check"] = today
+    _catalog.schedule_daily_a_refresh(today=today)
+
+
+def _flush_catalog_update_notices() -> None:
+    for message in _catalog.consume_notices():
+        st.toast(message)
 
 _MAX_WARN   = 30
 _BATCH_SIZE = 15
@@ -149,10 +164,11 @@ _FONT_SIZES = {
 # 页面配置
 # =============================================================================
 st.set_page_config(
-    page_title="快速分析 · A股智能分析站",
+    page_title="快速分析 · DUKA Stock Analysis Engine V5-Pro",
     page_icon="🏠", layout="wide",
     initial_sidebar_state="expanded",
 )
+enforce_sidebar_password_gate()
 
 # =============================================================================
 # Session State
@@ -196,10 +212,16 @@ _SS = {
     "iw_pending":      None,   # 待加入池的 (code, name)，None = 无待处理
     "iw_should_focus": False,  # True → JS 在下次渲染后回焦输入框
     "iw_input_gen":    0,      # 每次清空输入框时递增，用于 key 轮转
+    "iw_searchbox_result_count": 0,
+    "iw_searchbox_single_exact": False,
+    "last_update_check": "",
 }
 for _k, _v in _SS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v.copy() if isinstance(_v,(set,list,dict)) else _v
+
+_schedule_catalog_daily_refresh()
+_flush_catalog_update_notices()
 
 # =============================================================================
 # 主题注入
@@ -555,7 +577,7 @@ def _wizard_commit(code: str, name: str) -> None:
         pool.append(code)
     checked.add(code)
     sources[code] = "manual"
-    names[code]   = name or STOCK_NAME_MAP.get(code, code)
+    names[code] = name or _catalog.lookup(code, market=st.session_state.get("iw_market", "A")) or code
 
     st.session_state.pool_codes    = pool
     st.session_state.checked_codes = checked
@@ -565,6 +587,85 @@ def _wizard_commit(code: str, name: str) -> None:
     # 轮转 key → 下次渲染时 text_input 是"新 widget"→ 自动空白，无异常
     st.session_state["iw_input_gen"] = st.session_state.get("iw_input_gen", 0) + 1
     st.session_state["iw_should_focus"] = True   # 通知 JS 回焦
+
+
+def _is_manual_force_add_candidate(query: str, market: str) -> bool:
+    q = (query or "").strip()
+    if market == "A":
+        return bool(re.fullmatch(r"\d{6}", q))
+    if market == "HK":
+        return bool(re.fullmatch(r"\d{5}", q))
+    if market == "US":
+        return bool(re.fullmatch(r"[A-Za-z]{1,5}", q))
+    return False
+
+
+def _searchbox_search(searchterm: str, market: str = "A") -> list:
+    q = (searchterm or "").strip()
+    st.session_state["iw_searchbox_result_count"] = 0
+    st.session_state["iw_searchbox_single_exact"] = False
+    if not q:
+        return []
+
+    query = q.upper() if market == "US" else q
+    candidates = _catalog.search(query, market=market, limit=8)
+    options = []
+    seen_codes = set()
+
+    for item in candidates:
+        code = item["code"]
+        name = item["name"]
+        seen_codes.add(code)
+        options.append(
+            (
+                f"{code} · {name}",
+                {
+                    "code": code,
+                    "name": name,
+                    "market": market,
+                    "match_type": item.get("match_type", "catalog"),
+                },
+            )
+        )
+
+    exact_matches = [
+        item for item in candidates
+        if item.get("code") == query
+        or str(item.get("name") or "").strip().upper() == query.upper()
+    ]
+
+    if _is_manual_force_add_candidate(query, market) and query not in seen_codes:
+        fallback_name = _catalog.lookup(query, market=market) or query
+        options.append(
+            (
+                f"直接添加 {query}（目录未收录）",
+                {
+                    "code": query,
+                    "name": fallback_name,
+                    "market": market,
+                    "match_type": "force_add",
+                },
+            )
+        )
+
+    st.session_state["iw_searchbox_result_count"] = len(options)
+    st.session_state["iw_searchbox_single_exact"] = len(exact_matches) == 1 and len(options) == 1
+
+    return options
+
+
+def _on_searchbox_submit(selected: dict | None) -> None:
+    if not selected:
+        return
+
+    code = str(selected.get("code") or "").strip()
+    if not code:
+        return
+
+    market = str(selected.get("market") or st.session_state.get("iw_market", "A")).strip() or "A"
+    name = str(selected.get("name") or "").strip() or _catalog.lookup(code, market=market) or code
+    st.session_state["iw_pending"] = (code, name)
+    st.session_state["iw_commit_requested"] = True
 
 
 _IW_CSS = """<style>
@@ -667,6 +768,102 @@ def _iw_focus_js(should_focus: bool) -> str:
 </script>"""
 
 
+def _iw_searchbox_js(should_focus: bool, auto_submit_single: bool) -> str:
+    focus_stmt = (
+        "inp.focus();"
+        "if (typeof inp.setSelectionRange === 'function') {"
+        "  var len = (inp.value || '').length;"
+        "  inp.setSelectionRange(len, len);"
+        "}"
+    ) if should_focus else ""
+    single_submit = "true" if auto_submit_single else "false"
+
+    return f"""<script>
+(function(){{
+  'use strict';
+  var doc = window.parent.document;
+  var autoSubmitSingle = {single_submit};
+
+  function visible(el){{
+    if(!el) return false;
+    var style = window.parent.getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null;
+  }}
+
+  function findInput(){{
+    var selectors = [
+      'input[id*="iw_search_"]',
+      'input[role="combobox"]',
+      'input[aria-autocomplete="list"]',
+      '[data-baseweb="select"] input',
+      '[data-baseweb="input"] input'
+    ];
+    for(var s=0; s<selectors.length; s++){{
+      var all = doc.querySelectorAll(selectors[s]);
+      for(var i=0; i<all.length; i++){{
+        var el = all[i];
+        var ph = (el.getAttribute('placeholder') || '');
+        var id = (el.id || '');
+        if(
+          id.indexOf('iw_search_') >= 0 ||
+          ph.indexOf('\\u4ee3\\u7801') >= 0 ||
+          ph.indexOf('Ticker') >= 0 ||
+          ph.indexOf('\\u62fc\\u97f3') >= 0
+        ){{
+          return el;
+        }}
+      }}
+    }}
+    return null;
+  }}
+
+  function listOptions(){{
+    var selectors = [
+      '[role="option"]',
+      '[id*="react-select"][id*="-option-"]',
+      '[class*="option"]'
+    ];
+    for(var s=0; s<selectors.length; s++){{
+      var nodes = Array.prototype.slice.call(doc.querySelectorAll(selectors[s]))
+        .filter(visible)
+        .filter(function(el){{
+          return !!(el.innerText || '').trim();
+        }});
+      if(nodes.length) return nodes;
+    }}
+    return [];
+  }}
+
+  function clickSingleVisibleOption(){{
+    var options = listOptions();
+    if(options.length !== 1) return false;
+    options[0].dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true }}));
+    options[0].click();
+    return true;
+  }}
+
+  function bindEnter(inp){{
+    if(!inp || inp.dataset.iwSearchboxBound === '1') return;
+    inp.dataset.iwSearchboxBound = '1';
+    inp.addEventListener('keydown', function(e){{
+      if(e.key !== 'Enter') return;
+      if(!autoSubmitSingle) return;
+      window.parent.setTimeout(function(){{
+        clickSingleVisibleOption();
+      }}, 0);
+    }}, true);
+  }}
+
+  window.parent.setTimeout(function(){{
+    var inp = findInput();
+    if(!inp) return;
+    bindEnter(inp);
+    {focus_stmt}
+  }}, 120);
+}})();
+</script>"""
+
+
 def _wizard_body() -> None:
     """
     Input Wizard UI 主体逻辑。
@@ -675,7 +872,12 @@ def _wizard_body() -> None:
     st.markdown(_IW_CSS, unsafe_allow_html=True)
 
     # ── Session state 初始化 ──────────────────────────────────────────────
-    for _k, _v in [("iw_q", ""), ("iw_should_focus", False), ("iw_pending", None)]:
+    for _k, _v in [
+        ("iw_q", ""),
+        ("iw_should_focus", False),
+        ("iw_pending", None),
+        ("iw_commit_requested", False),
+    ]:
         if _k not in st.session_state:
             st.session_state[_k] = _v
 
@@ -831,7 +1033,129 @@ def _wizard_body() -> None:
 #   · 用户打字 → 只有 wizard 区域 rerun（约 50ms），页面其余不动
 #   · 芯片点击 / 清空按钮 → 调用 st.rerun() → 触发全页 rerun（代码池同步更新）
 #   · JS 在每次渲染后自动重新绑定 Enter 键 + 在全页 rerun 后回焦输入框
-_render_input_wizard = getattr(st, "fragment", lambda fn: fn)(_wizard_body)
+def _wizard_body_searchbox() -> None:
+    """Searchbox-based Input Wizard with pooled state updates."""
+    st.markdown(_IW_CSS, unsafe_allow_html=True)
+
+    for _k, _v in [
+        ("iw_q", ""),
+        ("iw_should_focus", False),
+        ("iw_pending", None),
+        ("iw_commit_requested", False),
+    ]:
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
+    pending = st.session_state.get("iw_pending")
+    if pending:
+        _wizard_commit(pending[0], pending[1])
+        st.session_state["iw_pending"] = None
+        st.toast(f"✅ {pending[1]}（{pending[0]}）已入池")
+
+    mkt_col, stat_col = st.columns([3.5, 5])
+    with mkt_col:
+        mkt_display = st.radio(
+            "市场",
+            ["🇨🇳 A股", "🇭🇰 港股", "🇺🇸 美股"],
+            horizontal=True,
+            key="iw_market_radio",
+            label_visibility="collapsed",
+        )
+    market = {"🇨🇳 A股": "A", "🇭🇰 港股": "HK", "🇺🇸 美股": "US"}.get(mkt_display, "A")
+    st.session_state["iw_market"] = market
+    with stat_col:
+        st.markdown(
+            f"<span style='font-size:11px;color:#8A9BAE;line-height:2.8'>"
+            f"{_catalog.status_badge(market)}</span>",
+            unsafe_allow_html=True,
+        )
+
+    pool_n = len(st.session_state.pool_codes)
+    locked = pool_n >= _IW_MAX_POOL
+    placeholder_map = {
+        "A": "代码 / 名称 / 拼音首字母",
+        "HK": "代码 / 名称 例如 00700 / 腾讯控股",
+        "US": "Ticker / 名称 例如 AAPL / Apple Inc",
+    }
+    inp_col, cnt_col, clr_col = st.columns([7.0, 1.5, 0.8])
+
+    with inp_col:
+        if locked:
+            st.text_input(
+                "iw_input_label",
+                value="",
+                placeholder="🚫 代码池已满 40 只，请先运行或删除后继续",
+                key="iw_searchbox_locked",
+                label_visibility="collapsed",
+                disabled=True,
+            )
+        else:
+            _iw_key = f"iw_search_{st.session_state.get('iw_input_gen', 0)}"
+            st_searchbox(
+                _searchbox_search,
+                market=market,
+                key=_iw_key,
+                label=None,
+                placeholder=placeholder_map.get(market, ""),
+                clear_on_submit=True,
+                debounce=120,
+                rerun_scope="fragment",
+                submit_function=_on_searchbox_submit,
+            )
+            st.caption("输入代码、名称或拼音首字母，选中后会自动加入代码池。")
+
+    with cnt_col:
+        if pool_n >= _IW_MAX_POOL:
+            badge_color, badge_icon = "#ef4444", "🚫"
+            badge_weight = "700"
+        elif pool_n >= 30:
+            badge_color, badge_icon = "#f59e0b", "⚠️"
+            badge_weight = "600"
+        else:
+            badge_color, badge_icon = "#6b7280", "📳"
+            badge_weight = "400"
+        st.markdown(
+            f"<div style='text-align:center;padding-top:7px;"
+            f"font-size:11px;font-family:JetBrains Mono,monospace;"
+            f"color:{badge_color};font-weight:{badge_weight}'>"
+            f"{badge_icon} {pool_n}/{_IW_MAX_POOL}</div>",
+            unsafe_allow_html=True,
+        )
+
+    with clr_col:
+        if st.button(
+            "🗏",
+            key="iw_btn_clear_pool",
+            help="一键清空整个代码池（不可撤销）",
+            use_container_width=True,
+            type="secondary",
+        ):
+            st.session_state.pool_codes = []
+            st.session_state.checked_codes = set()
+            st.session_state.pool_sources = {}
+            st.session_state.pool_names = {}
+            _reset_fuzzy_state()
+            st.session_state["iw_input_gen"] = st.session_state.get("iw_input_gen", 0) + 1
+            st.rerun()
+
+    if st.session_state.get("iw_commit_requested"):
+        st.session_state["iw_commit_requested"] = False
+        st.rerun()
+
+    _should_focus = bool(st.session_state.get("iw_should_focus", False))
+    if _should_focus:
+        st.session_state["iw_should_focus"] = False
+    components.html(
+        _iw_searchbox_js(
+            should_focus=_should_focus,
+            auto_submit_single=bool(st.session_state.get("iw_searchbox_single_exact", False)),
+        ),
+        height=0,
+        scrolling=False,
+    )
+
+
+_render_input_wizard = getattr(st, "fragment", lambda fn: fn)(_wizard_body_searchbox)
 
 def _source_label(source: str) -> str:
     return {

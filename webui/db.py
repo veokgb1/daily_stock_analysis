@@ -21,6 +21,7 @@ from typing import List, Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).parent.parent / "stock_history.db"
+_DB_MAINTENANCE_MARKER = Path(__file__).parent.parent / "data" / ".db_maintenance.json"
 _SNAPSHOT_FACTOR_COLUMNS = [
     ("trend_prediction", "TEXT"),
     ("current_price", "REAL"),
@@ -49,6 +50,7 @@ def _get_conn():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     try:
         yield conn
         conn.commit()
@@ -163,6 +165,12 @@ def init_db() -> None:
         except Exception:
             pass
 
+        try:
+            conn.execute("PRAGMA optimize")
+        except Exception:
+            pass
+
+    _run_db_maintenance_if_due()
     logger.info(f"数据库初始化完成：{_DB_PATH}")
 
 
@@ -183,6 +191,38 @@ def _load_json_list(raw: str) -> List[str]:
 
 def _factor_json(raw: Optional[Dict[str, Any]]) -> str:
     return json.dumps(raw or {}, ensure_ascii=False)
+
+
+def _run_db_maintenance_if_due() -> None:
+    """每天最多执行一次轻量数据库维护，控制 SQLite 文件膨胀。"""
+    today = datetime.now().date().isoformat()
+    last_run = None
+    if _DB_MAINTENANCE_MARKER.exists():
+        try:
+            payload = json.loads(_DB_MAINTENANCE_MARKER.read_text(encoding="utf-8"))
+            last_run = payload.get("last_vacuum_date")
+        except Exception:
+            last_run = None
+
+    if last_run == today:
+        return
+
+    _DB_MAINTENANCE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA incremental_vacuum")
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+        _DB_MAINTENANCE_MARKER.write_text(
+            json.dumps({"last_vacuum_date": today}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        logger.info("SQLite 维护完成：VACUUM")
+    except Exception as exc:
+        logger.warning("SQLite 维护失败：%s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ from src.config import setup_env
 setup_env()
 
 import streamlit as st
+from src.streamlit_guard import enforce_sidebar_password_gate
 
 from webui.db import (
     add_to_quick_pool,
@@ -38,10 +39,11 @@ if "history_delete_pending_id" not in st.session_state:
     st.session_state.history_delete_pending_id = None
 
 st.set_page_config(
-    page_title="历史记忆库 · A股智能分析站",
+    page_title="历史记忆库 · DUKA Stock Analysis Engine V5-Pro",
     page_icon="🕰️",
     layout="wide",
 )
+enforce_sidebar_password_gate()
 
 # ─────────────────────── 全局 CSS 注入 ──────────────────────────────────────
 # 目的：

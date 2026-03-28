@@ -3,7 +3,9 @@
 # ===================================
 
 # 核心依赖
+streamlit>=1.37.0           # Streamlit app runtime (required for SCC)
 python-dotenv>=1.0.0        # 环境变量配置管理
+streamlit-searchbox>=0.1.24 # Searchbox autocomplete component for stock search
 tenacity>=8.2.0             # 重试机制（指数退避）
 sqlalchemy>=2.0.0           # ORM数据库操作
 schedule>=1.2.0             # 定时任务调度

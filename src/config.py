@@ -26,6 +26,8 @@ from src.report_language import (
 )
 
 logger = logging.getLogger(__name__)
+_STREAMLIT_SECRET_KEYS = ("GEMINI_API_KEY", "GATEWAY_IP", "APP_PASSWORD")
+_LOCAL_PROXY_GATEWAY = "10.10.10.252"
 
 
 @dataclass
@@ -397,14 +399,17 @@ def get_effective_agent_models_to_try(config: "Config") -> List[str]:
 
 def setup_env(override: bool = False):
     """
-    Initialize environment variables from .env file.
+    Initialize environment variables from Streamlit secrets or local .env file.
 
     Args:
         override: If True, overwrite existing environment variables with values
-                  from .env file. Set to True when reloading config after updates.
-                  Default is False to preserve behavior on initial load where
-                  system environment variables take precedence.
+                  from Streamlit secrets / .env file.
     """
+    loaded_from_secrets = _load_streamlit_secrets_into_env(override=override)
+    if loaded_from_secrets:
+        _apply_runtime_proxy_policy(source="secrets")
+        return
+
     # src/config.py -> src/ -> root
     env_file = os.getenv("ENV_FILE")
     if env_file:
@@ -412,6 +417,92 @@ def setup_env(override: bool = False):
     else:
         env_path = Path(__file__).parent.parent / '.env'
     load_dotenv(dotenv_path=env_path, override=override)
+    _apply_runtime_proxy_policy(source="dotenv")
+
+
+def _load_streamlit_secrets_into_env(override: bool = False) -> bool:
+    """Load supported Streamlit secrets into os.environ when available."""
+    try:
+        import streamlit as st  # type: ignore
+    except Exception:
+        return False
+
+    loaded_any = False
+    try:
+        secrets = st.secrets
+        for key in _STREAMLIT_SECRET_KEYS:
+            value = secrets.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            if override or not os.getenv(key):
+                os.environ[key] = text
+            loaded_any = True
+    except Exception:
+        return False
+    return loaded_any
+
+
+def detect_runtime_mode() -> str:
+    """
+    Return ``cloud`` when Streamlit secrets are present, otherwise ``local``.
+    """
+    for key in _STREAMLIT_SECRET_KEYS:
+        if get_streamlit_secret(key):
+            return "cloud"
+    return "local"
+
+
+def _clear_proxy_env() -> None:
+    for key in (
+        "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+        "ALL_PROXY", "all_proxy",
+    ):
+        os.environ.pop(key, None)
+
+
+def _apply_runtime_proxy_policy(source: str) -> None:
+    """
+    Cloud defaults to direct connection. Local enables proxy only for the
+    trusted gateway ``10.10.10.252``.
+    """
+    gateway_ip = (os.getenv("GATEWAY_IP") or "").strip()
+    proxy_port = (os.getenv("PROXY_PORT") or "").strip()
+    runtime_mode = "cloud" if source == "secrets" or detect_runtime_mode() == "cloud" else "local"
+
+    if runtime_mode == "cloud":
+        _clear_proxy_env()
+        return
+
+    if gateway_ip == _LOCAL_PROXY_GATEWAY and proxy_port:
+        proxy_url = f"http://{gateway_ip}:{proxy_port}"
+        os.environ["PROXY_HOST"] = gateway_ip
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ[key] = proxy_url
+        return
+
+    os.environ.pop("PROXY_HOST", None)
+    _clear_proxy_env()
+
+
+def get_streamlit_secret(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Read a Streamlit secret safely without hard-failing outside Streamlit."""
+    try:
+        import streamlit as st  # type: ignore
+    except Exception:
+        return default
+
+    try:
+        value = st.secrets.get(key)
+    except Exception:
+        return default
+
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
 
 
 @dataclass
@@ -463,8 +554,8 @@ class Config:
 
     # Legacy single-key fields (kept for backward compatibility; gemini_api_keys[0] when set)
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-3-flash-preview"  # 主模型
-    gemini_model_fallback: str = "gemini-2.5-flash"  # 备选模型
+    gemini_model: str = field(default_factory=lambda: os.getenv("MODEL_VERSION", "gemini-2.5-flash"))  # 主模型
+    gemini_model_fallback: str = field(default_factory=lambda: os.getenv("MODEL_VERSION", "gemini-2.5-flash"))  # 备选模型
     gemini_temperature: float = 0.7  # 温度参数（0.0-2.0，控制输出随机性，默认0.7）
 
     # Gemini API 请求配置（防止 429 限流）
@@ -905,7 +996,7 @@ class Config:
         # LITELLM_MODEL: explicit config takes precedence; else infer from available keys
         litellm_model = os.getenv('LITELLM_MODEL', '').strip()
         if not litellm_model:
-            _gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview').strip()
+            _gemini_model_name = os.getenv('GEMINI_MODEL', os.getenv('MODEL_VERSION', 'gemini-2.5-flash')).strip()
             _anthropic_model_name = os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022').strip()
             _openai_model_name = os.getenv('OPENAI_MODEL', 'gpt-4o-mini').strip()
             if gemini_api_keys:
@@ -927,7 +1018,7 @@ class Config:
             litellm_fallback_models = [m.strip() for m in _fallback_str.split(',') if m.strip()]
         else:
             # Backward compat: use gemini_model_fallback when primary is gemini
-            _gemini_fallback = os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash').strip()
+            _gemini_fallback = os.getenv('GEMINI_MODEL_FALLBACK', os.getenv('MODEL_VERSION', 'gemini-2.5-flash')).strip()
             if litellm_model.startswith('gemini/') and _gemini_fallback:
                 _fb = f'gemini/{_gemini_fallback}' if '/' not in _gemini_fallback else _gemini_fallback
                 litellm_fallback_models = [_fb]
@@ -1079,8 +1170,8 @@ class Config:
             openai_api_keys=openai_api_keys,
             deepseek_api_keys=deepseek_api_keys,
             gemini_api_key=os.getenv('GEMINI_API_KEY'),
-            gemini_model=os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview'),
-            gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash'),
+            gemini_model=os.getenv('GEMINI_MODEL', os.getenv('MODEL_VERSION', 'gemini-2.5-flash')),
+            gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', os.getenv('MODEL_VERSION', 'gemini-2.5-flash')),
             gemini_temperature=parse_env_float(os.getenv('GEMINI_TEMPERATURE'), 0.7, field_name='GEMINI_TEMPERATURE'),
             gemini_request_delay=parse_env_float(os.getenv('GEMINI_REQUEST_DELAY'), 2.0, field_name='GEMINI_REQUEST_DELAY', minimum=0.0),
             gemini_max_retries=parse_env_int(os.getenv('GEMINI_MAX_RETRIES'), 5, field_name='GEMINI_MAX_RETRIES', minimum=0),

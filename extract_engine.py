@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-webui/extract_engine.py — 纯 Gemini 提取引擎 V8.1
+webui/extract_engine.py — 纯 Gemini 提取引擎 Match5
 ==================================================
 
 V8.1 修复点：
@@ -19,7 +19,7 @@ V8.1 修复点：
 设计红线（不变）：
   · 绝对禁止 pytesseract / easyocr
   · 网络调用统一用 openai 兼容客户端，base_url 指向 Gemini 兼容端点
-  · 函数入口强制注入 PROXY_HOST/PROXY_PORT 代理环境变量
+  · 函数入口按运行环境决定是否注入代理
   · 标准数据契约：List[{"name":str, "code":str, "valid":bool, "source":str}]
   · 语音转写防幻觉：转写失败时返回空串，绝不捏造代码
 """
@@ -36,7 +36,7 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-_GEMINI_MODEL    = "gemini-2.5-flash"  # V8.2：写死新模型，禁止回退
+_GEMINI_MODEL    = "gemini-2.5-flash"  # Match5：写死新模型，禁止回退
 
 StockItem = Dict  # {"name": str, "code": str, "valid": bool, "source": str}
 
@@ -46,16 +46,19 @@ StockItem = Dict  # {"name": str, "code": str, "valid": bool, "source": str}
 # =============================================================================
 
 def ensure_proxy() -> None:
-    """将 .env 中的 PROXY_HOST/PROXY_PORT 注入 os.environ。幂等。"""
+    """仅在本地命中指定网关时注入代理；云端默认直连。"""
     if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
         return
-    host = os.getenv("PROXY_HOST", "").strip()
+    gateway_ip = os.getenv("GATEWAY_IP", "").strip()
+    if gateway_ip != "10.10.10.252":
+        return
+    host = os.getenv("PROXY_HOST", gateway_ip).strip()
     port = os.getenv("PROXY_PORT", "").strip()
     if host and port:
         proxy_url = f"http://{host}:{port}"
         for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             os.environ[k] = proxy_url
-        logger.debug(f"[ExtractEngine] 代理已注入: {proxy_url}")
+        logger.info(f"[ExtractEngine] 本地代理已注入: {proxy_url}")
 
 
 # =============================================================================

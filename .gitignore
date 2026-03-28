@@ -37,6 +37,8 @@ venv/
 ENV/
 env/
 .venv/
+.vendor/
+.vendor_old/
 
 # IDE
 .idea/
@@ -48,7 +50,12 @@ env/
 
 # 数据和日志
 /data/
+data/*.pkl
+data/**/*.pkl
+data/*.db
+data/**/*.db
 logs/
+logs/**
 reports/
 *.db
 *.sqlite
@@ -83,7 +90,7 @@ static/
 *.md
 *.txt
 !requirements.txt
-!README_V4.md
+!README_V5.md
 
 # backup hardening: keep root databases out of git even if explicit add is attempted
 /*.db
