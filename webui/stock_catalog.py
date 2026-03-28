@@ -446,3 +446,27 @@ class CatalogStore:
     def lookup(self, code: str, market: str = "A") -> Optional[str]:
         with self._lock:
             return self._codes.get(market, {}).get(code)
+
+
+_compat_catalog: Optional[CatalogStore] = None
+_compat_lock = threading.Lock()
+
+
+def _get_compat_catalog() -> CatalogStore:
+    global _compat_catalog
+    if _compat_catalog is not None:
+        return _compat_catalog
+    with _compat_lock:
+        if _compat_catalog is None:
+            store = CatalogStore()
+            store.bootstrap()
+            _compat_catalog = store
+    return _compat_catalog
+
+
+def is_search_ready(market: str = "A") -> bool:
+    """Module-level compatibility shim for callers that resolved the module."""
+    try:
+        return _get_compat_catalog().is_search_ready(market)
+    except Exception:
+        return False

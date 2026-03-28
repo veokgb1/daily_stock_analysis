@@ -63,6 +63,7 @@ init_db()
 
 # ── 股票目录单例（进程级缓存，所有 Streamlit session 共享）─────────────────
 from webui.stock_catalog import CatalogStore  # noqa: E402
+import webui.stock_catalog as stock_catalog_module  # noqa: E402
 
 @st.cache_resource(show_spinner=False)
 def _get_catalog() -> CatalogStore:
@@ -71,6 +72,22 @@ def _get_catalog() -> CatalogStore:
     return cat
 
 _catalog: CatalogStore = _get_catalog()
+
+
+def _catalog_is_search_ready(market: str = "A") -> bool:
+    method = getattr(_catalog, "is_search_ready", None)
+    if callable(method):
+        try:
+            return bool(method(market))
+        except Exception:
+            pass
+    fallback = getattr(stock_catalog_module, "is_search_ready", None)
+    if callable(fallback):
+        try:
+            return bool(fallback(market))
+        except Exception:
+            return False
+    return False
 
 
 def _schedule_catalog_daily_refresh() -> None:
@@ -605,7 +622,7 @@ def _searchbox_search(searchterm: str, market: str = "A") -> list:
     q = (searchterm or "").strip()
     st.session_state["iw_searchbox_result_count"] = 0
     st.session_state["iw_searchbox_single_exact"] = False
-    if not _catalog.is_search_ready(market):
+    if not _catalog_is_search_ready(market):
         return []
     if not q:
         return []
@@ -1092,7 +1109,7 @@ def _wizard_body_searchbox() -> None:
                 label_visibility="collapsed",
                 disabled=True,
             )
-        elif not _catalog.is_search_ready(market):
+        elif not _catalog_is_search_ready(market):
             with st.spinner("正在载入本地股票雷达快照..."):
                 st.text_input(
                     "iw_input_loading",
