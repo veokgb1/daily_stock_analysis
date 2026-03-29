@@ -234,9 +234,11 @@ _SS = {
     "iw_searchbox_single_exact": False,
     "last_update_check": "",
 }
+# setdefault 保证：只在 key 不存在时写入初始值，跨页面导航绝不覆盖已有状态
 for _k, _v in _SS.items():
-    if _k not in st.session_state:
-        st.session_state[_k] = _v.copy() if isinstance(_v,(set,list,dict)) else _v
+    st.session_state.setdefault(
+        _k, _v.copy() if isinstance(_v, (set, list, dict)) else _v
+    )
 
 _schedule_catalog_daily_refresh()
 _flush_catalog_update_notices()
@@ -909,12 +911,16 @@ def _wizard_body() -> None:
         st.toast(f"✅ {pending[1]}（{pending[0]}）已入池")
 
     # ── 市场选择器 + 目录状态 ─────────────────────────────────────────────
+    # index= 从 iw_market session state 反向映射，确保跨页导航后选项与逻辑值对齐
+    _MW_OPTS     = ["🇨🇳 A股", "🇭🇰 港股", "🇺🇸 美股"]
+    _MW_CODE_IDX = {"A": 0, "HK": 1, "US": 2}
     mkt_col, stat_col = st.columns([3.5, 5])
     with mkt_col:
         mkt_display = st.radio(
             "市场",
-            ["🇨🇳 A股", "🇭🇰 港股", "🇺🇸 美股"],
+            _MW_OPTS,
             horizontal=True,
+            index=_MW_CODE_IDX.get(st.session_state.get("iw_market", "A"), 0),
             key="iw_market_radio",
             label_visibility="collapsed",
         )
@@ -1072,12 +1078,16 @@ def _wizard_body_searchbox() -> None:
         st.session_state["iw_pending"] = None
         st.toast(f"✅ {pending[1]}（{pending[0]}）已入池")
 
+    # index= 从 iw_market session state 反向映射，确保跨页导航后选项与逻辑值对齐
+    _MW_OPTS     = ["🇨🇳 A股", "🇭🇰 港股", "🇺🇸 美股"]
+    _MW_CODE_IDX = {"A": 0, "HK": 1, "US": 2}
     mkt_col, stat_col = st.columns([3.5, 5])
     with mkt_col:
         mkt_display = st.radio(
             "市场",
-            ["🇨🇳 A股", "🇭🇰 港股", "🇺🇸 美股"],
+            _MW_OPTS,
             horizontal=True,
+            index=_MW_CODE_IDX.get(st.session_state.get("iw_market", "A"), 0),
             key="iw_market_radio",
             label_visibility="collapsed",
         )
@@ -2656,9 +2666,14 @@ _has   = len(final_codes)>0
 
 _cr,_cc=st.columns([5,1])
 with _cc:
-    if st.button("🗑️ 全清",use_container_width=True,key="btn_clear_all"):
-        for k,v in _SS.items():
-            st.session_state[k]=v.copy() if isinstance(v,(set,list,dict)) else v
+    if st.button("🗑️ 全清", use_container_width=True, key="btn_clear_all"):
+        # 1. 重置所有业务逻辑状态到初始值
+        for k, v in _SS.items():
+            st.session_state[k] = v.copy() if isinstance(v, (set, list, dict)) else v
+        # 2. 同步删除 widget state 键（不在 _SS 中但与逻辑值绑定）
+        #    若不删除，这些 widget 会在下次渲染时用旧的 widget state 覆盖上面的重置值
+        for _wk in ("iw_market_radio", "sb_run_mode", "main_run_mode", "iw_input_gen"):
+            st.session_state.pop(_wk, None)
         st.rerun()
 with _cr:
     run_clicked=cart_run_clicked or st.button(
