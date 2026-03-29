@@ -19,6 +19,7 @@ from src.notification import NotificationService
 from src.market_analyzer import MarketAnalyzer
 from src.search_service import SearchService
 from src.analyzer import GeminiAnalyzer
+from src.formatters import markdown_to_plain_text
 
 
 logger = logging.getLogger(__name__)
@@ -89,9 +90,9 @@ def run_market_review(
         if review_report:
             # 保存报告到文件
             date_str = datetime.now().strftime('%Y%m%d')
-            report_filename = f"market_review_{date_str}.md"
+            report_filename = f"market_review_{date_str}.txt"
             filepath = notifier.save_report_to_file(
-                f"# 🎯 大盘复盘\n\n{review_report}", 
+                markdown_to_plain_text(f"Market Review\n\n{review_report}"), 
                 report_filename
             )
             logger.info(f"大盘复盘报告已保存: {filepath}")

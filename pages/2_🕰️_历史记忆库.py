@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 历史记忆库 · DUKA Stock Analysis Engine V5-Pro
 高科技驾驶舱风格重构版 — 遵循 A 股红涨绿跌色彩规范
@@ -19,6 +19,7 @@ setup_env()
 
 import streamlit as st
 
+from src.formatters import markdown_to_plain_text
 from src.streamlit_guard import enforce_sidebar_password_gate
 from webui.db import (
     add_to_quick_pool,
@@ -248,6 +249,25 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _plain_text_report(value: Any) -> str:
+    return markdown_to_plain_text(_normalize_text(value))
+
+
+def _report_filename(prefix: str, slug: str) -> str:
+    return f"{prefix}_{slug}.txt"
+
+
+def _render_text_preview(title: str, content: str, key: str, height: int = 260) -> None:
+    with st.expander(title, expanded=False):
+        st.text_area(
+            label="",
+            value=content or "暂无可预览内容",
+            height=height,
+            disabled=True,
+            key=key,
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、A 股色彩规范徽章（红涨绿跌，与国际惯例相反）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -410,14 +430,14 @@ def _get_batch_artifacts_payload(
     artifacts = get_run_artifacts(run_id) or {}
     stock_snaps = [s for s in batch_snaps if s.get("code") != "__market__"]
     market_fb = "\n\n".join(
-        s.get("report_md") or "" for s in batch_snaps if s.get("code") == "__market__"
+        _plain_text_report(s.get("report_md")) for s in batch_snaps if s.get("code") == "__market__"
     ).strip()
     return {
-        "market_report_md": _normalize_text(artifacts.get("market_report_md")) or market_fb,
-        "stock_report_md": _normalize_text(artifacts.get("stock_report_md"))
-            or _build_stock_report_text(stock_snaps),
-        "full_report_md": _normalize_text(artifacts.get("full_report_md"))
-            or _build_batch_download_text(run_id, batch_snaps),
+        "market_report_md": _plain_text_report(artifacts.get("market_report_md")) or market_fb,
+        "stock_report_md": _plain_text_report(artifacts.get("stock_report_md"))
+            or _plain_text_report(_build_stock_report_text(stock_snaps)),
+        "full_report_md": _plain_text_report(artifacts.get("full_report_md"))
+            or _plain_text_report(_build_batch_download_text(run_id, batch_snaps)),
         "business_log": _normalize_text(artifacts.get("business_log")),
         "debug_log": _normalize_text(artifacts.get("debug_log")),
         "schema_json": _normalize_text(artifacts.get("schema_json"))
@@ -642,8 +662,14 @@ def _render_card_actions(snap: Dict[str, Any], prefix: str) -> None:
             st.session_state["hide_pending_snap_id"] = snap["id"]
             st.rerun()
     with action_cols[2]:
-        with st.expander("查看原始 Markdown 报告", expanded=False):
-            st.markdown(snap.get("report_md") or "_无报告内容_")
+        with st.expander("TXT 在线预览", expanded=False):
+            st.text_area(
+                label="",
+                value=_plain_text_report(snap.get("report_md")) or "No report content",
+                height=220,
+                disabled=True,
+                key=f"card_report_preview_{prefix}_{snap['id']}",
+            )
 
     if st.session_state.get("hide_pending_snap_id") == snap["id"]:
         st.warning("确认后将从列表隐藏，数据库记录不会物理删除。")
@@ -733,6 +759,12 @@ def _render_stock_card_v2(
             _render_action_block(snap, factors)
 
     _render_card_actions(snap, prefix)
+    _render_text_preview(
+        "TXT 在线预览",
+        _plain_text_report(snap.get("report_md")),
+        key=f"stock_txt_preview_{prefix}_{snap.get('id')}",
+        height=220,
+    )
     st.divider()
 
 
@@ -795,7 +827,13 @@ def _render_timeline_mode(precise_code: str) -> Optional[str]:
     selected_snap = version_options[selected_label]
 
     with st.expander("📄 当前版本报告详情", expanded=True):
-        st.markdown(selected_snap.get("report_md") or "_无报告内容_")
+        st.text_area(
+            label="",
+            value=_plain_text_report(selected_snap.get("report_md")) or "No report content",
+            height=280,
+            disabled=True,
+            key=f"timeline_selected_report_{precise_code}",
+        )
 
     st.divider()
     for i, snap in enumerate(history, start=1):
@@ -925,9 +963,10 @@ def _render_batch_mode(
     # Tab 1：大盘报告（高级内参散文风格）
     with tab_market:
         if market_md:
-            st.markdown(
-                f'<div class="market-prose">\n\n{market_md}\n\n</div>',
-                unsafe_allow_html=True,
+            _render_text_preview(
+                "TXT Preview",
+                market_md,
+                key=f"market_txt_preview_{selected_run_id}",
             )
         else:
             st.info("当前批次暂无大盘报告。")
@@ -935,7 +974,12 @@ def _render_batch_mode(
     # Tab 2：全量报告
     with tab_full:
         if full_md:
-            st.markdown(full_md)
+            _render_text_preview(
+                "TXT Preview",
+                full_md,
+                key=f"full_txt_preview_{selected_run_id}",
+                height=320,
+            )
         else:
             st.info("当前批次暂无全量报告。")
 
@@ -976,6 +1020,14 @@ def _render_batch_mode(
                     prefix=f"batch_{selected_run_id}",
                 )
 
+        if stock_md:
+            _render_text_preview(
+                "TXT Preview",
+                stock_md,
+                key=f"stock_txt_preview_{selected_run_id}",
+                height=320,
+            )
+
     # ── 下载矩阵（Tab 区下方，三列整齐）──────────────────────────────────
     st.markdown(
         "<p class='dim-label' style='margin:18px 0 6px 0; text-transform:uppercase; "
@@ -986,10 +1038,10 @@ def _render_batch_mode(
     with dl1:
         if market_md:
             st.download_button(
-                "⬇️ 大盘报告 .md",
+                "⬇️ 大盘报告 .txt",
                 data=market_md,
-                file_name=f"market_review_{run_date_slug}.md",
-                mime="text/markdown",
+                file_name=_report_filename("market_review", run_date_slug),
+                mime="text/plain",
                 use_container_width=True,
             )
         else:
@@ -997,10 +1049,10 @@ def _render_batch_mode(
     with dl2:
         if stock_md:
             st.download_button(
-                "⬇️ 个股报告 .md",
+                "⬇️ 个股报告 .txt",
                 data=stock_md,
-                file_name=f"stock_report_{run_date_slug}.md",
-                mime="text/markdown",
+                file_name=_report_filename("stock_report", run_date_slug),
+                mime="text/plain",
                 use_container_width=True,
             )
         else:
@@ -1008,10 +1060,10 @@ def _render_batch_mode(
     with dl3:
         if full_md:
             st.download_button(
-                "⬇️ 全量报告 .md",
+                "⬇️ 全量报告 .txt",
                 data=full_md,
-                file_name=f"full_report_{run_date_slug}.md",
-                mime="text/markdown",
+                file_name=_report_filename("full_report", run_date_slug),
+                mime="text/plain",
                 use_container_width=True,
             )
         else:
@@ -1127,7 +1179,7 @@ with sec_col1:
         st.download_button(
             label="⬇️ 下载运行日志",
             data=_biz_log if _biz_log else "（暂无运行日志）",
-            file_name=f"business_log_{_slug}.log",
+            file_name=_report_filename("business_log", _slug),
             mime="text/plain",
             use_container_width=True,
             disabled=not _biz_log,
@@ -1146,8 +1198,9 @@ with sec_col2:
         st.download_button(
             label="⬇️ 下载通信日志",
             data=_dbg_log if _dbg_log else "（暂无通信日志）",
-            file_name=f"debug_log_{_slug}.log",
+            file_name=_report_filename("debug_log", _slug),
             mime="text/plain",
             use_container_width=True,
             disabled=not _dbg_log,
         )
+

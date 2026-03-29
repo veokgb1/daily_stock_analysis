@@ -33,6 +33,7 @@ from src.report_language import (
 )
 from bot.models import BotMessage
 from src.utils.data_processing import normalize_model_used
+from src.formatters import markdown_to_plain_text
 from src.notification_sender import (
     AstrbotSender,
     CustomWebhookSender,
@@ -1299,7 +1300,7 @@ class NotificationService(
         lines.extend([
             "---",
             f"*{labels['not_investment_advice']}*",
-            f"*{labels['details_report_hint']} reports/report_{report_date.replace('-', '')}.md*"
+            f"*{labels['details_report_hint']} reports/report_{report_date.replace('-', '')}.txt*"
         ])
 
         content = "\n".join(lines)
@@ -1710,7 +1711,7 @@ class NotificationService(
         
         if filename is None:
             date_str = datetime.now().strftime('%Y%m%d')
-            filename = f"report_{date_str}.md"
+            filename = f"report_{date_str}.txt"
         
         # 确保 reports 目录存在（使用项目根目录下的 reports）
         reports_dir = Path(__file__).parent.parent / 'reports'
@@ -1719,7 +1720,7 @@ class NotificationService(
         filepath = reports_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(markdown_to_plain_text(content))
         
         logger.info(f"日报已保存到: {filepath}")
         return str(filepath)

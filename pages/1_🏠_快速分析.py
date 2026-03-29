@@ -39,6 +39,7 @@ from streamlit_searchbox import st_searchbox
 
 from src.config import get_config
 from src.streamlit_guard import enforce_sidebar_password_gate
+from src.formatters import markdown_to_plain_text
 from src.core.pipeline import StockAnalysisPipeline
 from src.logging_config import setup_logging
 from src.data.stock_mapping import STOCK_NAME_MAP
@@ -1341,14 +1342,27 @@ def _read_physical_log(log_prefix: str, debug: bool = False, lines: int = 1000):
     return path, tail.encode("utf-8"), tail
 
 
+def _plain_text_report(value: str) -> str:
+    return markdown_to_plain_text(value or "").strip()
+
+
+def _report_filename(prefix: str, slug: str) -> str:
+    return f"{prefix}_{slug}.txt"
+
+
+def _render_text_preview(title: str, content: str, key: str, height: int = 260) -> None:
+    with st.expander(title, expanded=False):
+        st.text_area("", value=content or "No report content", height=height, disabled=True, key=key)
+
+
 def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
     if not run_id:
         return
 
     try:
         per_reports = st.session_state.get("per_stock_reports", {}) or {}
-        stock_report_md = "\n\n---\n\n".join(
-            f"# {code} {st.session_state.pool_names.get(code, code)}\n\n{report_md}"
+        stock_report_md = "\n\n==========\n\n".join(
+            f"{code} {st.session_state.pool_names.get(code, code)}\n\n{_plain_text_report(report_md)}"
             for code, report_md in per_reports.items()
             if report_md
         )
@@ -1368,9 +1382,9 @@ def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
         save_run_artifacts(
             run_id,
             run_mode=run_mode,
-            market_report_md=st.session_state.get("market_report", "") or "",
+            market_report_md=_plain_text_report(st.session_state.get("market_report", "") or ""),
             stock_report_md=stock_report_md,
-            full_report_md=st.session_state.get("analysis_report", "") or "",
+            full_report_md=_plain_text_report(st.session_state.get("analysis_report", "") or ""),
             business_log=business_log_tail or "",
             debug_log=debug_log_tail or "",
             schema_json=json.dumps(schema_payload, ensure_ascii=False, indent=2),
@@ -2890,19 +2904,22 @@ if st.session_state.analysis_results:
     st.write("")
     _d1,_d2=st.columns(2)
     _tfn=ts_lbl.replace(" ","_").replace(":","")
+    _report_txt = _plain_text_report(report)
     with _d1:
-        st.download_button("📋 下载完整 Markdown 报告",
-            data=report.encode("utf-8"),
-            file_name=f"dsa_report_{_tfn}.md",
-            mime="text/markdown",use_container_width=True,key="dl_agg")
+        st.download_button("📋 下载完整 TXT 报告",
+            data=_report_txt.encode("utf-8"),
+            file_name=_report_filename("full_report", _tfn),
+            mime="text/plain",use_container_width=True,key="dl_agg")
     with _d2:
-        _all_per="\n\n---\n\n".join(
-            f"# {r.name}（{r.code}）\n\n"+per_rpts.get(r.code,"")
+        _all_per="\n\n==========\n\n".join(
+            f"{r.name}（{r.code}）\n\n"+_plain_text_report(per_rpts.get(r.code,""))
             for r in results)
-        st.download_button("🗂️ 下载逐股完整报告",
+        st.download_button("🗂️ 下载逐股 TXT 报告",
             data=_all_per.encode("utf-8"),
-            file_name=f"dsa_per_stock_{_tfn}.md",
-            mime="text/markdown",use_container_width=True,key="dl_per")
+            file_name=_report_filename("stock_report", _tfn),
+            mime="text/plain",use_container_width=True,key="dl_per")
+    _render_text_preview("完整报告 TXT 预览", _report_txt, key="report_preview_agg", height=260)
+    _render_text_preview("逐股报告 TXT 预览", _all_per, key="report_preview_per", height=260)
     st.divider()
 
 # 大盘复盘
@@ -2910,13 +2927,15 @@ if st.session_state.market_report:
     _tl=st.session_state.run_ts
     st.markdown(f"## 🌍 「{_tl}」大盘复盘报告")
     st.markdown(st.session_state.market_report)
+    _market_txt = _plain_text_report(st.session_state.market_report)
     st.download_button(
-        "📥 下载大盘复盘报告",
-        data=st.session_state.market_report.encode("utf-8"),
-        file_name=f"dsa_market_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-        mime="text/markdown",
+        "📥 下载大盘复盘 TXT",
+        data=_market_txt.encode("utf-8"),
+        file_name=_report_filename("market_review", datetime.now().strftime('%Y%m%d_%H%M%S')),
+        mime="text/plain",
         key="dl_market_business_unique",
     )
+    _render_text_preview("大盘复盘 TXT 预览", _market_txt, key="report_preview_market", height=240)
 
 st.divider()
 
