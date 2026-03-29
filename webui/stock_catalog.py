@@ -36,6 +36,15 @@ def _initials(text: str) -> str:
         return ""
 
 
+def _full_pinyin(text: str) -> str:
+    try:
+        from pypinyin import lazy_pinyin  # type: ignore
+
+        return "".join(lazy_pinyin(text or "")).lower()
+    except Exception:
+        return ""
+
+
 class CatalogStore:
     MARKETS: Tuple[str, ...] = ("A", "HK", "US")
     MARKET_LABELS: Dict[str, str] = {
@@ -48,6 +57,7 @@ class CatalogStore:
         self._lock = threading.RLock()
         self._codes: Dict[str, Dict[str, str]] = {m: {} for m in self.MARKETS}
         self._initials_idx: Dict[str, Dict[str, List[str]]] = {m: {} for m in self.MARKETS}
+        self._pinyin_map: Dict[str, Dict[str, str]] = {m: {} for m in self.MARKETS}
         self._status: Dict[str, str] = {m: "idle" for m in self.MARKETS}
         self._errors: Dict[str, str] = {m: "" for m in self.MARKETS}
         self._snapshot_path = _SNAPSHOT_PATH
@@ -58,13 +68,18 @@ class CatalogStore:
         self._runtime_mode = detect_runtime_mode()
         self._cloud_mode = self._runtime_mode == "cloud"
 
-    def _build_initials_index(self, market: str) -> None:
+    def _build_search_indexes(self, market: str) -> None:
         idx: Dict[str, List[str]] = {}
+        pinyin_map: Dict[str, str] = {}
         for code, name in self._codes[market].items():
             ini = _initials(name)
+            full = _full_pinyin(name)
             if ini:
                 idx.setdefault(ini, []).append(code)
+            if full:
+                pinyin_map[code] = full
         self._initials_idx[market] = idx
+        self._pinyin_map[market] = pinyin_map
 
     def _normalize_code(self, market: str, code: str) -> str:
         text = str(code or "").strip()
@@ -80,11 +95,12 @@ class CatalogStore:
     def _normalize_snapshot_payload(
         self,
         payload: object,
-    ) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Dict[str, List[str]]]]:
+    ) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Dict[str, List[str]]], Dict[str, Dict[str, str]]]:
         normalized: Dict[str, Dict[str, str]] = {m: {} for m in self.MARKETS}
         initials_idx: Dict[str, Dict[str, List[str]]] = {m: {} for m in self.MARKETS}
+        pinyin_map: Dict[str, Dict[str, str]] = {m: {} for m in self.MARKETS}
         if not isinstance(payload, dict):
-            return normalized, initials_idx
+            return normalized, initials_idx, pinyin_map
 
         if payload and all(isinstance(k, str) and isinstance(v, str) for k, v in payload.items()):
             normalized["A"] = {
@@ -92,23 +108,36 @@ class CatalogStore:
                 for code, name in payload.items()
                 if str(code).strip() and str(name).strip()
             }
-            return normalized, initials_idx
+            return normalized, initials_idx, pinyin_map
 
         markets_payload = payload.get("markets", payload)
         if not isinstance(markets_payload, dict):
-            return normalized, initials_idx
+            return normalized, initials_idx, pinyin_map
 
         raw_initials = payload.get("initials_idx", {})
+        raw_pinyin = payload.get("pinyin_map", {})
 
         for market, stocks in markets_payload.items():
             if market not in self.MARKETS or not isinstance(stocks, dict):
                 continue
             parsed: Dict[str, str] = {}
+            parsed_pinyin: Dict[str, str] = {}
             for code, name in stocks.items():
                 code_text = self._normalize_code(market, str(code))
-                name_text = str(name or "").strip()
+                if isinstance(name, dict):
+                    name_text = str(name.get("name") or "").strip()
+                    pinyin_text = str(
+                        name.get("pinyin")
+                        or name.get("full_pinyin")
+                        or ""
+                    ).strip().lower()
+                else:
+                    name_text = str(name or "").strip()
+                    pinyin_text = ""
                 if code_text and name_text:
                     parsed[code_text] = name_text
+                    if pinyin_text:
+                        parsed_pinyin[code_text] = pinyin_text
             normalized[market] = parsed
 
             market_initials = raw_initials.get(market, {}) if isinstance(raw_initials, dict) else {}
@@ -122,7 +151,17 @@ class CatalogStore:
                     for initials, codes in market_initials.items()
                     if isinstance(codes, list)
                 }
-        return normalized, initials_idx
+            market_pinyin = raw_pinyin.get(market, {}) if isinstance(raw_pinyin, dict) else {}
+            if isinstance(market_pinyin, dict):
+                parsed_pinyin.update(
+                    {
+                        self._normalize_code(market, str(code)): str(value).strip().lower()
+                        for code, value in market_pinyin.items()
+                        if str(code).strip() and str(value).strip()
+                    }
+                )
+            pinyin_map[market] = parsed_pinyin
+        return normalized, initials_idx, pinyin_map
 
     def _load_snapshot(self) -> bool:
         candidate_paths = (
@@ -136,7 +175,7 @@ class CatalogStore:
             try:
                 with path.open("rb") as fh:
                     payload = pickle.load(fh)
-                markets, initials_idx = self._normalize_snapshot_payload(payload)
+                markets, initials_idx, pinyin_map = self._normalize_snapshot_payload(payload)
             except Exception as exc:
                 logger.warning("[catalog] snapshot load failed for %s: %s", path.name, exc)
                 continue
@@ -147,12 +186,10 @@ class CatalogStore:
                     if not stocks:
                         continue
                     self._codes[market] = stocks
-                    if initials_idx.get(market):
-                        self._initials_idx[market] = initials_idx[market]
-                    elif self._cloud_mode:
-                        self._initials_idx[market] = {}
-                    else:
-                        self._build_initials_index(market)
+                    self._initials_idx[market] = initials_idx.get(market, {})
+                    self._pinyin_map[market] = pinyin_map.get(market, {})
+                    if not self._initials_idx[market] or not self._pinyin_map[market]:
+                        self._build_search_indexes(market)
                     self._status[market] = "seeded"
                     self._errors[market] = ""
                     loaded_markets.append(f"{market}={len(stocks)}")
@@ -192,11 +229,17 @@ class CatalogStore:
                 for market, index in self._initials_idx.items()
                 if index
             }
+            pinyin_map = {
+                market: dict(index)
+                for market, index in self._pinyin_map.items()
+                if index
+            }
         return {
             "version": 1,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "markets": markets,
             "initials_idx": initials_idx,
+            "pinyin_map": pinyin_map,
         }
 
     def _persist_snapshot(self) -> None:
@@ -257,7 +300,7 @@ class CatalogStore:
             old_count = len(current_codes)
             if len(current_codes) != len(stocks) or set(current_codes) != set(stocks):
                 self._codes["A"] = stocks
-                self._build_initials_index("A")
+                self._build_search_indexes("A")
                 changed = True
             self._status["A"] = "ready"
             self._errors["A"] = ""
@@ -295,7 +338,7 @@ class CatalogStore:
         with self._lock:
             if stocks:
                 self._codes["HK"] = stocks
-                self._build_initials_index("HK")
+                self._build_search_indexes("HK")
                 self._errors["HK"] = ""
             self._status["HK"] = "ready" if stocks else "error"
 
@@ -324,7 +367,7 @@ class CatalogStore:
         with self._lock:
             if stocks:
                 self._codes["US"] = stocks
-                self._build_initials_index("US")
+                self._build_search_indexes("US")
                 self._errors["US"] = ""
             self._status["US"] = "ready" if stocks else "error"
 
@@ -397,39 +440,70 @@ class CatalogStore:
         if not q:
             return []
 
+        query_code = self._normalize_code(market, q)
         q_upper = q.upper()
+        q_lower = q.lower()
         is_digit = q.isdigit()
         is_cn = any("\u4e00" <= ch <= "\u9fff" for ch in q)
-        is_alpha = q_upper.isalpha()
+        has_alpha = any(ch.isalpha() for ch in q)
 
         with self._lock:
             codes = self._codes.get(market, {})
             initials_idx = self._initials_idx.get(market, {})
+            pinyin_map = self._pinyin_map.get(market, {})
 
         results: List[Dict[str, str]] = []
         seen = set()
 
-        if q in codes:
-            results.append({"code": q, "name": codes[q], "match_type": "code_exact"})
-            seen.add(q)
+        def _append(code: str, match_type: str) -> None:
+            if code in seen or code not in codes or len(results) >= limit:
+                return
+            results.append({"code": code, "name": codes[code], "match_type": match_type})
+            seen.add(code)
 
-        if is_digit and len(results) < limit:
+        if query_code in codes:
+            _append(query_code, "code_exact")
+
+        if (is_digit or market in {"HK", "US"}) and len(results) < limit:
             for code, name in codes.items():
                 if len(results) >= limit:
                     break
-                if code.startswith(q) and code not in seen:
-                    results.append({"code": code, "name": name, "match_type": "code_prefix"})
-                    seen.add(code)
+                if code.upper().startswith(query_code.upper()):
+                    _append(code, "code_prefix")
 
-        if is_cn and len(results) < limit:
+        if len(results) < limit:
             for code, name in codes.items():
                 if len(results) >= limit:
                     break
-                if q in name and code not in seen:
-                    results.append({"code": code, "name": name, "match_type": "name"})
-                    seen.add(code)
+                folded_name = str(name or "").lower()
+                if q_lower == folded_name:
+                    _append(code, "name_exact")
+            for code, name in codes.items():
+                if len(results) >= limit:
+                    break
+                folded_name = str(name or "").lower()
+                if q_lower in folded_name:
+                    _append(code, "name")
 
-        if is_alpha and len(results) < limit:
+        if has_alpha and len(results) < limit:
+            for code, pinyin in pinyin_map.items():
+                if len(results) >= limit:
+                    break
+                if pinyin == q_lower:
+                    _append(code, "pinyin_exact")
+            for initials, code_list in initials_idx.items():
+                if len(results) >= limit:
+                    break
+                if initials == q_upper:
+                    for code in code_list:
+                        if len(results) >= limit:
+                            break
+                        _append(code, "initials_exact")
+            for code, pinyin in pinyin_map.items():
+                if len(results) >= limit:
+                    break
+                if pinyin.startswith(q_lower) or q_lower in pinyin:
+                    _append(code, "pinyin")
             for initials, code_list in initials_idx.items():
                 if len(results) >= limit:
                     break
@@ -437,9 +511,7 @@ class CatalogStore:
                     for code in code_list:
                         if len(results) >= limit:
                             break
-                        if code not in seen and code in codes:
-                            results.append({"code": code, "name": codes[code], "match_type": "initials"})
-                            seen.add(code)
+                        _append(code, "initials")
 
         return results[:limit]
 
