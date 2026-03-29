@@ -470,3 +470,73 @@ def is_search_ready(market: str = "A") -> bool:
         return _get_compat_catalog().is_search_ready(market)
     except Exception:
         return False
+
+
+def error(market: str = "A") -> str:
+    try:
+        return _get_compat_catalog().error(market)
+    except Exception:
+        return ""
+
+
+def status(market: str = "A") -> str:
+    try:
+        return _get_compat_catalog().status(market)
+    except Exception:
+        return "error"
+
+
+def size(market: str = "A") -> int:
+    try:
+        return _get_compat_catalog().size(market)
+    except Exception:
+        return 0
+
+
+def status_badge(market: str = "A") -> str:
+    try:
+        return _get_compat_catalog().status_badge(market)
+    except Exception:
+        return "⚪ 未加载"
+
+
+def schedule_daily_a_refresh(today: Optional[str] = None) -> bool:
+    try:
+        return _get_compat_catalog().schedule_daily_a_refresh(today=today)
+    except Exception:
+        return False
+
+
+def consume_notices() -> List[str]:
+    try:
+        return _get_compat_catalog().consume_notices()
+    except Exception:
+        return []
+
+
+def search(query: str, market: str = "A", limit: int = 8) -> List[Dict]:
+    try:
+        return _get_compat_catalog().search(query, market=market, limit=limit)
+    except Exception:
+        return []
+
+
+def lookup(code: str, market: str = "A") -> Optional[str]:
+    try:
+        return _get_compat_catalog().lookup(code, market=market)
+    except Exception:
+        return None
+
+
+def is_loading(market: str = "A") -> bool:
+    try:
+        return _get_compat_catalog().status(market) == "loading"
+    except Exception:
+        return False
+
+
+def get_progress(market: str = "A") -> float:
+    try:
+        return 1.0 if _get_compat_catalog().is_search_ready(market) else 0.0
+    except Exception:
+        return 0.0
