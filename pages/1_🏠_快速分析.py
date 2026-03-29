@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# Fix stock data alignment-*- coding: utf-8 -*-
 """
 pages/1_🏠_快速分析.py  V5-Pro · 纯血 Gemini 底盘 · 双风格布局切换
 ================================================================
