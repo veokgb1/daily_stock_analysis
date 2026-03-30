@@ -524,15 +524,6 @@ def _clear_fast_analysis_state() -> None:
     _clear_fast_analysis_widget_state()
 
 
-def _reset_runtime_flags() -> None:
-    st.session_state.is_running = False
-    st.session_state.run_requested = False
-    st.session_state.pause_flag = False
-    st.session_state.stop_flag = False
-    st.session_state.pending_codes = []
-    st.session_state.pending_mode = ""
-
-
 _normalize_fast_analysis_pool_state()
 if _fast_page_entered:
     _sync_fast_analysis_widget_state_from_session()
@@ -2865,13 +2856,24 @@ st.divider()
 # =============================================================================
 # STEP 4：执行 + 实时进度 + 结果渲染
 # =============================================================================
-st.markdown("""
+if "report_panel_hidden" not in st.session_state:
+    st.session_state.report_panel_hidden = False
+
+_report_data_ready = bool(st.session_state.analysis_results) or bool(st.session_state.market_report)
+_step4_title_col, _step4_btn_col = st.columns([4, 1])
+with _step4_title_col:
+    st.markdown("""
 <div class="step-card">
   <div class="step-badge">STEP 04</div>
   <div class="step-title">📊 Step 4 · 报告</div>
   <div class="step-sub">Phase 1 保留现有报告出口；后续再切到摘要优先、标签过滤与切片阅读</div>
 </div>
 """, unsafe_allow_html=True)
+with _step4_btn_col:
+    button_label = "📂 展开报告" if st.session_state.report_panel_hidden else "👁️ 隐藏报告"
+    if st.button(button_label, key="toggle_report_btn", use_container_width=True, disabled=not _report_data_ready):
+        st.session_state.report_panel_hidden = not st.session_state.report_panel_hidden
+        st.rerun()
 
 _live_report_ph = st.container()
 
@@ -2957,35 +2959,29 @@ if st.session_state.is_running and st.session_state.run_requested:
             st.session_state.last_error=str(_exc)
             _sc.update(label=f"❌ 运行异常：{_exc}",state="error",expanded=True)
         finally:
-            _reset_runtime_flags()
-    st.rerun()
+            st.session_state.is_running = False
+            st.session_state.run_requested = False
+            st.session_state.pause_flag = False
+            st.session_state.stop_flag = False
+            st.session_state.pending_codes = []
+            st.session_state.pending_mode = ""
+    st.rerun()  # 必须强制重载页面，打断顶部计时器与按钮锁态
 
 if st.session_state.last_error:
     st.error(f"❌ {st.session_state.last_error}")
 
 _has_any=bool(st.session_state.analysis_results) or bool(st.session_state.market_report)
 if _has_any and st.session_state.is_running:
-    _reset_runtime_flags()
+    st.session_state.is_running = False
+    st.session_state.run_requested = False
     st.rerun()
 if not _has_any and not st.session_state.last_error:
     st.info("📝 完成上方步骤后，点击【确认并运行分析】，报告将会在此处同屏渲染。")
     st.stop()
 
 _report_hidden = bool(st.session_state.get("report_panel_hidden", False))
-if _has_any:
-    _report_ctrl_btn, _report_ctrl_hint = st.columns([1.5, 7.5])
-    with _report_ctrl_btn:
-        if _report_hidden:
-            if st.button("📂 重新展开", key="btn_expand_report", type="secondary"):
-                st.session_state.report_panel_hidden = False
-                st.rerun()
-        else:
-            if st.button("👁️ 隐藏当前报告", key="btn_hide_report", type="secondary"):
-                st.session_state.report_panel_hidden = True
-                st.rerun()
-    with _report_ctrl_hint:
-        if _report_hidden:
-            st.caption("👁️ 报告已折叠隐藏 (数据已缓存)")
+if _has_any and _report_hidden:
+    st.caption("👁️ 报告已折叠隐藏 (数据已缓存)")
 
 if st.session_state.elapsed_sec>0:
     st.markdown(
