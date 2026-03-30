@@ -97,27 +97,97 @@ def _coerce_confidence(value) -> Optional[float]:
     return min(number, 1.0)
 
 
+def _first_non_empty(obj: dict, *keys: str):
+    if not isinstance(obj, dict):
+        return None
+    for key in keys:
+        value = obj.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _extract_item_fields(obj: dict) -> dict:
+    return {
+        "name": _first_non_empty(
+            obj,
+            "name", "Name",
+            "stock_name", "stockName",
+            "security_name", "securityName",
+            "company_name", "companyName",
+            "symbol_name", "symbolName",
+            "ticker_name", "tickerName",
+        ),
+        "code": _first_non_empty(
+            obj,
+            "code", "Code",
+            "stock_code", "stockCode",
+            "security_code", "securityCode",
+            "ticker", "Ticker",
+            "symbol", "Symbol",
+        ),
+        "market": _first_non_empty(
+            obj,
+            "market", "Market",
+            "exchange", "Exchange",
+        ),
+        "mention": _first_non_empty(
+            obj,
+            "mention", "Mention",
+            "alias", "Alias",
+            "raw", "Raw",
+            "raw_text", "rawText",
+        ),
+        "confidence": _coerce_confidence(
+            _first_non_empty(
+                obj,
+                "confidence", "Confidence",
+                "score", "Score",
+                "probability", "Probability",
+                "conf", "Conf",
+            )
+        ),
+    }
+
+
 def _items_from_parsed(parsed: Optional[list], source: str) -> List[StockItem]:
     """Normalize parsed JSON objects into StockItem entries."""
     items: List[StockItem] = []
     if not isinstance(parsed, list):
         return items
 
-    seen_codes: set = set()
+    seen_keys: set = set()
     for obj in parsed:
         if not isinstance(obj, dict):
             continue
-        name = str(obj.get("name", "")).strip()
-        code_raw = str(obj.get("code", "")).strip()
-        confidence = _coerce_confidence(obj.get("confidence"))
+        fields = _extract_item_fields(obj)
+        name = str(fields.get("name") or "").strip()
+        code_raw = str(fields.get("code") or "").strip()
+        market = str(fields.get("market") or "").strip()
+        mention = str(fields.get("mention") or "").strip()
+        confidence = fields.get("confidence")
         if confidence is not None and confidence < 0.3:
             continue
-        code = re.sub(r"[^\d]", "", code_raw).zfill(6)
-        if (re.match(r"^\d{6}$", code)
-                and code != "000000"
-                and code not in seen_codes):
-            seen_codes.add(code)
-            items.append(_make_item(name or code, code, source))
+        code = re.sub(r"[^\d]", "", code_raw).zfill(6) if code_raw else ""
+        has_valid_code = bool(re.match(r"^\d{6}$", code) and code != "000000")
+        display_name = name or code_raw or ""
+        if not has_valid_code and not display_name:
+            continue
+
+        dedupe_key = code if has_valid_code else f"name:{display_name.lower()}"
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+
+        item_code = code if has_valid_code else (code_raw or display_name)
+        item = _make_item(display_name or item_code, item_code, source)
+        if market:
+            item["market"] = market
+        if mention:
+            item["mention"] = mention
+        if confidence is not None:
+            item["confidence"] = confidence
+        items.append(item)
     return items
 
 
@@ -140,7 +210,7 @@ def _parse_llm_json(raw_text: str) -> Optional[list]:
         if isinstance(obj, list):
             return obj
         if isinstance(obj, dict):
-            for key in ("stocks", "items", "data", "result", "results"):
+            for key in ("stocks", "Stocks", "items", "Items", "data", "Data", "result", "Result", "results", "Results"):
                 value = obj.get(key)
                 if isinstance(value, list):
                     return value
@@ -241,13 +311,15 @@ _TEXT_MAPPING_PROMPT = """
 5. 仅过滤极低置信条目。若 confidence 低于 0.3，请不要输出该条。
 
 输出规则：
-- 只能输出 JSON 数组，不要解释，不要 Markdown，不要前后缀。
-- 每个元素结构固定为：
-  {"name":"官方股票简称","code":"6位数字代码","confidence":0.93,"mention":"原文中的提法"}
-- 如果没有识别到任何高置信股票，输出 []。
+1. 你必须返回严格的 JSON 数组，不要解释，不要 Markdown，不要任何前后缀。
+2. 每个对象的键名必须严格使用全小写字母：
+   `code`, `name`, `market`, `confidence`, `mention`
+3. 绝对不要改成 `Code`、`Name`、`stock_name`、`symbol` 或任何其他变体。
+4. 不要缺失必要键；如果某个字段不确定，也要保留键名并给出空字符串或合理默认值。
+5. 如果没有识别到任何高置信股票，输出 []。
 
-示例：
-[{"name":"拓维信息","code":"002261","confidence":0.92,"mention":"托维信息"},{"name":"宁德时代","code":"300750","confidence":0.95,"mention":"宁王"}]
+标准示例：
+[{"name":"拓维信息","code":"002261","market":"A","confidence":0.92,"mention":"托维信息"},{"name":"宁德时代","code":"300750","market":"A","confidence":0.95,"mention":"宁王"}]
 
 待识别文本：
 {content}
@@ -257,13 +329,14 @@ _MAPPING_PROMPT = """
 你是一个股票名称标准化引擎。请从输入内容中提取股票，并返回严格 JSON 数组。
 
 要求：
-- 尽量输出官方股票简称和 6 位数字代码。
-- 同一只股票只保留一次。
-- 不要输出解释，不要输出 Markdown。
-- 如果无法识别，返回 []。
+1. 尽量输出官方股票简称和 6 位数字代码。
+2. 同一只股票只保留一次。
+3. 不要输出解释，不要输出 Markdown。
+4. 你必须严格使用全小写键名：`code`, `name`, `market`, `confidence`, `mention`。
+5. 如果无法识别，返回 []。
 
 输出示例：
-[{"name":"贵州茅台","code":"600519"},{"name":"宁德时代","code":"300750"}]
+[{"name":"贵州茅台","code":"600519","market":"A","confidence":0.96,"mention":"茅台"},{"name":"宁德时代","code":"300750","market":"A","confidence":0.95,"mention":"宁德时代"}]
 
 待识别内容：
 {content}
@@ -272,8 +345,9 @@ _MAPPING_PROMPT = """
 _STRICT_JSON_RETRY_PROMPT = """
 请从下面内容中提取股票，并且只返回 JSON 数组。
 不要解释，不要 Markdown，不要任何前后缀。
-数组元素格式只允许是：
-[{"name":"官方中文简称","code":"6位数字代码","confidence":0.90}]
+你必须严格返回如下结构，并且键名必须全部小写，不允许变体：
+[{"name":"官方中文简称","code":"6位数字代码","market":"A","confidence":0.90,"mention":"原文提法"}]
+绝对不要返回 `Name`、`Code`、`stock_name`、`symbol` 等其他键名。
 如果没有识别到股票，返回 []。
 待识别内容：
 {content}
@@ -289,10 +363,14 @@ _VOICE_MAPPING_PROMPT = """
 4. 同一只股票只输出一次。
 
 输出规则：
-- 只能输出 JSON 数组，不要解释，不要 Markdown。
-- 元素结构：
-  {"name":"官方股票简称","code":"6位数字代码","confidence":0.88,"mention":"原始语音文本中的提法"}
-- 若没有识别到，输出 []。
+1. 只能输出 JSON 数组，不要解释，不要 Markdown。
+2. 每个对象的键名必须严格使用全小写字母：
+   `code`, `name`, `market`, `confidence`, `mention`
+3. 不允许改键名，不允许缺键。
+4. 若没有识别到，输出 []。
+
+标准结构：
+[{"name":"官方股票简称","code":"6位数字代码","market":"A","confidence":0.88,"mention":"原始语音文本中的提法"}]
 
 待识别语音转写内容：
 {content}
@@ -456,8 +534,8 @@ def extract_from_images(files) -> List[StockItem]:
             vision_items = _vision_extract_items_single(img_bytes, client)
             if vision_items:
                 for item in vision_items:
-                    code = item["code"]
-                    if code not in seen_codes:
+                    code = str(item.get("code") or item.get("Code") or "").strip()
+                    if code and code not in seen_codes:
                         seen_codes.add(code)
                         all_items.append(item)
                 logger.info("[ExtractEngine] Vision direct extraction accumulated %s items", len(all_items))
@@ -474,8 +552,8 @@ def extract_from_images(files) -> List[StockItem]:
         combined = "\n".join(all_texts)
         mapped_items = llm_map_to_items(combined, source="image", is_voice=False)
         for item in mapped_items:
-            code = item["code"]
-            if code not in seen_codes:
+            code = str(item.get("code") or item.get("Code") or "").strip()
+            if code and code not in seen_codes:
                 seen_codes.add(code)
                 all_items.append(item)
 
