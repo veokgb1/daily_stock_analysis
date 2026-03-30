@@ -357,7 +357,7 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
         resp = client.chat.completions.create(
             model=_GEMINI_MODEL,
             messages=[{"role": "user", "content": prompt_text}],
-            max_tokens=1600,
+            max_tokens=4096,
             temperature=0,
         )
         raw_text = _extract_message_text(getattr(resp.choices[0].message, "content", ""))
@@ -432,7 +432,7 @@ def _vision_ocr_single(img_bytes: bytes, client) -> str:
                     {"type": "text", "text": "请只做 OCR，按自然顺序输出图片中的股票相关原始文字，不要总结，不要解释；如果没有可读文字，返回空字符串。"},
                 ],
             }],
-            max_tokens=1600,
+            max_tokens=4096,
             temperature=0,
         )
         return _extract_message_text(getattr(resp.choices[0].message, "content", ""))
@@ -464,7 +464,7 @@ def _vision_extract_items_single(img_bytes: bytes, client) -> List[StockItem]:
                     },
                 ],
             }],
-            max_tokens=1600,
+            max_tokens=4096,
             temperature=0,
         )
         raw_text = _extract_message_text(getattr(resp.choices[0].message, "content", ""))
@@ -543,7 +543,7 @@ def transcribe_audio(audio_bytes: bytes) -> str:
                         {"type": "text", "text": "请将这段中文音频转写为纯文本，只返回转写结果，不要解释；如果听不清，请返回空字符串。"},
                     ],
                 }],
-                max_tokens=500,
+                max_tokens=4096,
                 temperature=0,
             )
             text = _extract_message_text(getattr(resp.choices[0].message, "content", ""))
