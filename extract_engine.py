@@ -201,8 +201,8 @@ def _strip_markdown_fences(raw_text: str) -> str:
 
 
 def _parse_llm_json(raw_text: str) -> Optional[list]:
-    """Parse a JSON array from an LLM response with aggressive tolerance."""
-    text = _strip_markdown_fences(raw_text)
+    """Parse a JSON array from an LLM response with simple, explicit fallbacks."""
+    text = (raw_text or "").strip().lstrip("\ufeff")
     if not text:
         return None
 
@@ -216,74 +216,42 @@ def _parse_llm_json(raw_text: str) -> Optional[list]:
                     return value
         return None
 
-    try:
-        result = _coerce_list(json.loads(text))
+    def _try_load(candidate: str) -> Optional[list]:
+        try:
+            result = _coerce_list(json.loads(candidate))
+            if result is not None:
+                return result
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            print(f"JSON Decode Error: {e}")
+        return None
+
+    # 1) 标准 JSON 直读
+    result = _try_load(text)
+    if result is not None:
+        return result
+
+    # 2) 去掉 Markdown 代码块头尾后再读
+    stripped = text
+    if stripped.startswith("```json"):
+        stripped = stripped[len("```json"):].strip()
+    elif stripped.startswith("```"):
+        stripped = stripped[len("```"):].strip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].strip()
+    if stripped != text:
+        result = _try_load(stripped)
         if result is not None:
             return result
-    except (json.JSONDecodeError, ValueError, TypeError):
-        pass
 
-    greedy_match = re.search(r"\[.*\]", text, re.DOTALL)
-    if greedy_match:
-        chunk = greedy_match.group(0).strip()
-        try:
-            result = _coerce_list(json.loads(chunk))
-            if result is not None:
-                return result
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+    # 3) 如果前后混有废话，粗暴截取最外层数组
+    start = stripped.find("[")
+    end = stripped.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        result = _try_load(stripped[start:end + 1].strip())
+        if result is not None:
+            return result
 
-    fence_chunks = re.findall(r"```(?:json)?\s*([\s\S]*?)```", raw_text or "", flags=re.IGNORECASE)
-    for chunk in fence_chunks:
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        try:
-            result = _coerce_list(json.loads(chunk))
-            if result is not None:
-                return result
-        except (json.JSONDecodeError, ValueError, TypeError):
-            continue
-
-    candidates: List[str] = []
-    depth = 0
-    start = -1
-    in_string = False
-    escaped = False
-    for idx, ch in enumerate(text):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == "[":
-            if depth == 0:
-                start = idx
-            depth += 1
-            continue
-        if ch == "]" and depth > 0:
-            depth -= 1
-            if depth == 0 and start >= 0:
-                candidates.append(text[start:idx + 1])
-                start = -1
-
-    best: Optional[list] = None
-    for chunk in candidates:
-        try:
-            parsed = _coerce_list(json.loads(chunk))
-            if isinstance(parsed, list):
-                if best is None or len(parsed) > len(best):
-                    best = parsed
-        except (json.JSONDecodeError, ValueError, TypeError):
-            continue
-
-    return best
+    return None
 
 
 def _extract_message_text(message_content) -> str:
