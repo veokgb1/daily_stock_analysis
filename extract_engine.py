@@ -397,7 +397,7 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
             temperature=0,
         )
         raw_text = _extract_message_text(getattr(resp.choices[0].message, "content", ""))
-        print(f"\n{'='*20} [DEBUG: LLM RAW RESPONSE] {'='*20}\n{raw_text}\n{'='*60}\n")
+        print(f"\n{'='*20} [DEBUG: RAW LLM OUTPUT] {'='*20}\n{raw_text}\n{'='*60}\n")
         logger.debug("[ExtractEngine] %s raw response: %s", label, raw_text[:300])
         try:
             parsed = _parse_llm_json(raw_text)
