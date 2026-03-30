@@ -3,6 +3,7 @@
 历史记忆库 v4 · 管理全入侧边栏 · 红多绿空配色本土化 · 日志链路修复
 """
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -322,6 +323,36 @@ def _stock_info_strip(
     )
 
 
+def _inject_seq_into_full_md(full_md: str, stock_snaps: List[Dict[str, Any]]) -> str:
+    """
+    向全量报告 Markdown 中的个股标题注入 [i/N] 序号。
+
+    匹配规则：任何以 ## 开头、后跟股票名称或代码的标题行，
+    按 stock_snaps 出现顺序逐个替换（精确匹配代码），
+    无法精确匹配的标题保持原样，不破坏大盘报告等其他段落。
+    """
+    if not full_md or not stock_snaps:
+        return full_md
+    total = len(stock_snaps)
+    result = full_md
+    for idx, snap in enumerate(stock_snaps, start=1):
+        code = _norm(snap.get("code")) or ""
+        name = _norm(snap.get("name")) or ""
+        if not code:
+            continue
+        # 匹配形如 "## 名称（代码）" 或 "## 名称 (代码)" 的标题，允许全/半角括号
+        pattern = (
+            r"(^|\n)(##\s+"
+            + re.escape(name)
+            + r"\s*[（(]"
+            + re.escape(code)
+            + r"[）)])"
+        )
+        replacement = rf"\1## [{idx}/{total}] {name}（{code}）"
+        result = re.sub(pattern, replacement, result)
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 批次条目构建（带快照缓存，避免重复查询）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -610,6 +641,8 @@ with tab_market:
 with tab_full:
     md = arts["full_md"]
     if md:
+        # 动态注入个股序号（正则替换标题行，不破坏大盘等其他段落）
+        md = _inject_seq_into_full_md(md, stock_snaps)
         st.markdown(md)
     else:
         st.info("当前批次暂无全量报告。")
