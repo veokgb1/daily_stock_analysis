@@ -658,18 +658,25 @@ with tab_stocks:
                 f"[{i}/{total}] {name}（{code}）—— {adv or '未评级'}",
                 expanded=auto_expand,
             ):
-                # ★ 动态颜色信息条：序号 + 评级（红/绿/黄）+ 评分（红/绿/黄）+ 时间
+                # ── 层 1：批次进度标题（醒目序号，独立 UI，绝不与报告正文混用）──
+                st.markdown(
+                    f"### 📌 批次进度：**[{i}/{total}]**　｜　"
+                    f"股票：**{name}（{code}）**"
+                )
+
+                # ── 层 2：动态颜色信息条（红/绿/黄 评级 + 评分 + 时间）──────────
                 st.markdown(
                     _stock_info_strip(i, total, name, code, adv, score_raw, dt_str),
                     unsafe_allow_html=True,
                 )
 
+                # ── 层 3：分割线，彻底隔离元数据区与报告正文区 ─────────────────
+                st.divider()
+
+                # ── 层 4：原生报告正文（干净直出，不再拼接任何序号字符串）────────
                 if rpt_md:
-                    # ★ 原始 Markdown 直出，100% 对齐快速分析原生格式
-                    # 在报告正文前强制注入 ## [i/N] 序号标题，确保序号在展开内容中清晰可见
-                    seq_header = f"## [{i}/{total}] {name}（{code}）\n\n"
                     st.markdown('<div class="stock-rpt-wrap">', unsafe_allow_html=True)
-                    st.markdown(seq_header + rpt_md)
+                    st.markdown(rpt_md)
                     st.markdown("</div>", unsafe_allow_html=True)
                 else:
                     st.caption(
