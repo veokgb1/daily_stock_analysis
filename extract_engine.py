@@ -381,6 +381,7 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
     """Map natural language or OCR text into StockItem entries via LLM."""
     client = _get_client()
     items: List[StockItem] = []
+    prompt_content = content[:12000]
 
     if is_voice:
         prompt = _VOICE_MAPPING_PROMPT
@@ -388,6 +389,9 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
         prompt = _TEXT_MAPPING_PROMPT
     else:
         prompt = _MAPPING_PROMPT
+
+    def _render_prompt(template: str) -> str:
+        return template.replace("{content}", prompt_content)
 
     def _call_and_parse(prompt_text: str, label: str) -> List[StockItem]:
         resp = client.chat.completions.create(
@@ -411,12 +415,12 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
 
     if client:
         try:
-            items = _call_and_parse(prompt.format(content=content[:12000]), "llm_primary")
+            items = _call_and_parse(_render_prompt(prompt), "llm_primary")
             if items:
                 logger.info("[ExtractEngine] primary extraction succeeded with %s items", len(items))
                 return items
 
-            items = _call_and_parse(_STRICT_JSON_RETRY_PROMPT.format(content=content[:12000]), "llm_retry")
+            items = _call_and_parse(_render_prompt(_STRICT_JSON_RETRY_PROMPT), "llm_retry")
             if items:
                 logger.info("[ExtractEngine] retry extraction succeeded with %s items", len(items))
                 return items
