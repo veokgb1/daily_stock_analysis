@@ -1532,6 +1532,9 @@ def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
                 if any(tag in ln for tag in ("WARNING", "ERROR", "CRITICAL", "DEBUG"))
             ]
             debug_log_tail = "\n".join(debug_lines)
+        # debug 仍为空（非 Debug 模式 + 无高级别日志）→ 写入默认说明，禁止空值入库
+        if not debug_log_tail:
+            debug_log_tail = "非 Debug 模式运行，无底层通信日志记录。"
     except Exception as exc:
         logger.warning("_persist_run_artifacts 日志读取失败：%s", exc)
 
@@ -1544,11 +1547,13 @@ def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
             "run_ts":       st.session_state.get("run_ts", ""),
             "snapshot_ids": st.session_state.get("snapshot_ids", {}),
         }
-        schema_json = json.dumps(schema_payload, ensure_ascii=False, indent=2)
+        # default=str 兜底：任何非序列化对象（Pydantic / datetime 等）一律转 str
+        schema_json = json.dumps(schema_payload, ensure_ascii=False, indent=2,
+                                 default=str)
     except Exception as exc:
         logger.warning("_persist_run_artifacts schema 序列化失败：%s", exc)
         schema_json = json.dumps({"run_id": run_id, "run_mode": run_mode},
-                                 ensure_ascii=False)
+                                 ensure_ascii=False, default=str)
 
     # ── 步骤 4：写入数据库 ────────────────────────────────────────────────────
     try:

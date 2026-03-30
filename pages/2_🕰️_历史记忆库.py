@@ -666,8 +666,10 @@ with tab_stocks:
 
                 if rpt_md:
                     # ★ 原始 Markdown 直出，100% 对齐快速分析原生格式
+                    # 在报告正文前强制注入 ## [i/N] 序号标题，确保序号在展开内容中清晰可见
+                    seq_header = f"## [{i}/{total}] {name}（{code}）\n\n"
                     st.markdown('<div class="stock-rpt-wrap">', unsafe_allow_html=True)
-                    st.markdown(rpt_md)
+                    st.markdown(seq_header + rpt_md)
                     st.markdown("</div>", unsafe_allow_html=True)
                 else:
                     st.caption(
