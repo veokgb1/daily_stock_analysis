@@ -845,24 +845,30 @@ elif has_arts and not biz and not dbg:
         "请检查快速分析页面中日志收集与传参的时机是否正确。"
     )
 
+def _tail_log(text: str, max_lines: int = 300) -> str:
+    """显示侧保险截断：只取最后 max_lines 行，超出时在顶部加提示。"""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    kept = lines[-max_lines:]
+    return f"[仅显示最后 {max_lines} 行，共 {len(lines)} 行]\n" + "\n".join(kept)
+
+
 lc1, lc2 = st.columns(2)
 
 with lc1:
     with st.expander("📋 运行日志（Business Log）", expanded=False):
-        st.text_area(
-            label="",
-            value=biz if biz else "── 暂无运行日志 ──",
-            height=280, disabled=True, key="log_biz",
-        )
-        if biz:
-            st.caption(f"共 {len(biz):,} 字符 · {biz.count(chr(10))+1} 行")
+        # ★ 不设 key= ：避免 Streamlit session_state 用旧值覆盖当前 value
+        biz_display = _tail_log(biz) if biz else "── 暂无运行日志 ──"
+        st.text_area(label="", value=biz_display, height=280, disabled=True)
+        # 字数统计始终显示（空日志显示 0），彻底消灭"幽灵字数"
+        st.caption(f"共 {len(biz):,} 字符 · {biz.count(chr(10))+1 if biz else 0} 行")
 
 with lc2:
     with st.expander("🔧 通信日志（Debug Log）", expanded=False):
-        st.text_area(
-            label="",
-            value=dbg if dbg else "── 暂无通信日志 ──",
-            height=280, disabled=True, key="log_dbg",
-        )
-        if dbg:
-            st.caption(f"共 {len(dbg):,} 字符 · {dbg.count(chr(10))+1} 行")
+        # ★ 同上，不设 key=
+        dbg_display = _tail_log(dbg) if dbg else "── 暂无通信日志 ──"
+        st.text_area(label="", value=dbg_display, height=280, disabled=True)
+        st.caption(f"共 {len(dbg):,} 字符 · {dbg.count(chr(10))+1 if dbg else 0} 行")

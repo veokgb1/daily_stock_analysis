@@ -1547,8 +1547,9 @@ def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
     business_log_tail = ""
     debug_log_tail    = ""
     try:
-        _, _, business_log_tail = _read_physical_log("webui_v8", debug=False)
-        _, _, debug_log_tail    = _read_physical_log("webui_v8", debug=True)
+        # lines=300：写入 DB 前截断，防止 7 万字日志撑爆文本框和数据库
+        _, _, business_log_tail = _read_physical_log("webui_v8", debug=False, lines=300)
+        _, _, debug_log_tail    = _read_physical_log("webui_v8", debug=True,  lines=300)
         # 无独立 debug 文件时，从主日志提取 WARNING/ERROR 条目作为 debug 视图
         if not debug_log_tail and business_log_tail:
             debug_lines = [
