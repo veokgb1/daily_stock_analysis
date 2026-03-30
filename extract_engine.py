@@ -201,7 +201,7 @@ def _strip_markdown_fences(raw_text: str) -> str:
 
 
 def _parse_llm_json(raw_text: str) -> Optional[list]:
-    """Parse LLM JSON with direct load first, then salvage valid object fragments."""
+    """Parse LLM JSON with a short, predictable flow."""
     text = (raw_text or "").strip().lstrip("\ufeff")
     if not text:
         return None
@@ -242,33 +242,6 @@ def _parse_llm_json(raw_text: str) -> Optional[list]:
         result = _try_load(stripped)
         if result is not None:
             return result
-
-    # 3) 如果前后混有废话，粗暴截取最外层数组
-    start = stripped.find("[")
-    end = stripped.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        result = _try_load(stripped[start:end + 1].strip())
-        if result is not None:
-            return result
-
-    # 4) 抗毁伤兜底：数组/逗号坏了也逐个抢救对象碎片
-    rescued: List[dict] = []
-    seen_fragments: set = set()
-    for match in re.finditer(r"\{[^{}]*\}", stripped, re.DOTALL):
-        fragment = match.group(0).strip()
-        if not fragment or fragment in seen_fragments:
-            continue
-        seen_fragments.add(fragment)
-        try:
-            parsed = json.loads(fragment)
-        except (json.JSONDecodeError, ValueError, TypeError) as e:
-            print(f"JSON Decode Error: {e}")
-            continue
-        if isinstance(parsed, dict):
-            rescued.append(parsed)
-
-    if rescued:
-        return rescued
 
     return None
 
