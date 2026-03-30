@@ -2442,7 +2442,7 @@ with tab_text:
                     items=extract_from_text(raw_text)
                 if items:
                     fresh_items, skipped_dup = _dedupe_items_against_pool(items)
-                    added, queued, parsed = _ingest_items(fresh_items, "text", fallback_text=raw_text)
+                    added, queued, parsed = _ingest_items(fresh_items, "text")
                     if len(st.session_state.pool_codes)>_MAX_WARN:
                         st.warning(f"⚠️ 代码池已达 **{len(st.session_state.pool_codes)}** 只，**建议分批运行**。")
                     st.success(
@@ -2453,16 +2453,7 @@ with tab_text:
                     )
                     st.rerun()
                 else:
-                    local_added = _append_items(_extract_local_text_items(raw_text, "text"))
-                    queued = _queue_fuzzy_candidates(_extract_fuzzy_terms_from_text(raw_text), "text")
-                    if local_added:
-                        st.success(f"✅ 本地兜底已精确截获 {local_added} 只股票并加入代码池。")
-                        st.rerun()
-                    elif queued:
-                        st.warning(f"⚠️ 未精确识别到股票，已将 {queued} 条送入模糊确认区。")
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ 未识别到任何股票，请检查内容或手动输入。")
+                    st.warning("未识别到高置信度的股票实体，或大模型解析异常。")
             else:
                 st.info("请先粘贴文本。")
     with _c2:
