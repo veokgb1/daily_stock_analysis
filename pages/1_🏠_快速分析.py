@@ -524,6 +524,15 @@ def _clear_fast_analysis_state() -> None:
     _clear_fast_analysis_widget_state()
 
 
+def _reset_runtime_flags() -> None:
+    st.session_state.is_running = False
+    st.session_state.run_requested = False
+    st.session_state.pause_flag = False
+    st.session_state.stop_flag = False
+    st.session_state.pending_codes = []
+    st.session_state.pending_mode = ""
+
+
 _normalize_fast_analysis_pool_state()
 if _fast_page_entered:
     _sync_fast_analysis_widget_state_from_session()
@@ -2948,31 +2957,23 @@ if st.session_state.is_running and st.session_state.run_requested:
             st.session_state.last_error=str(_exc)
             _sc.update(label=f"❌ 运行异常：{_exc}",state="error",expanded=True)
         finally:
-            st.session_state.is_running=False
-            st.session_state.run_requested=False
-            st.session_state.pause_flag=False
-            st.session_state.stop_flag=False
-            st.session_state.pending_codes=[]
-            st.session_state.pending_mode=""
+            _reset_runtime_flags()
     st.rerun()
 
 if st.session_state.last_error:
     st.error(f"❌ {st.session_state.last_error}")
 
 _has_any=bool(st.session_state.analysis_results) or bool(st.session_state.market_report)
+if _has_any and st.session_state.is_running:
+    _reset_runtime_flags()
+    st.rerun()
 if not _has_any and not st.session_state.last_error:
     st.info("📝 完成上方步骤后，点击【确认并运行分析】，报告将会在此处同屏渲染。")
     st.stop()
 
-if st.session_state.elapsed_sec>0:
-    st.markdown(
-        f'<span class="elapsed-pill">⏱️ 本次分析总耗时 {st.session_state.elapsed_sec:.1f} 秒</span>',
-        unsafe_allow_html=True)
-    st.write("")
-
 _report_hidden = bool(st.session_state.get("report_panel_hidden", False))
 if _has_any:
-    _report_ctrl_btn, _report_ctrl_hint = st.columns([1.2, 8])
+    _report_ctrl_btn, _report_ctrl_hint = st.columns([1.5, 7.5])
     with _report_ctrl_btn:
         if _report_hidden:
             if st.button("📂 重新展开", key="btn_expand_report", type="secondary"):
@@ -2985,6 +2986,12 @@ if _has_any:
     with _report_ctrl_hint:
         if _report_hidden:
             st.caption("👁️ 报告已折叠隐藏 (数据已缓存)")
+
+if st.session_state.elapsed_sec>0:
+    st.markdown(
+        f'<span class="elapsed-pill">⏱️ 本次分析总耗时 {st.session_state.elapsed_sec:.1f} 秒</span>',
+        unsafe_allow_html=True)
+    st.write("")
 
 if not _report_hidden:
     # 个股结果
