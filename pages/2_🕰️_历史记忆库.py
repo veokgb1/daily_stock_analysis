@@ -254,6 +254,74 @@ def _emoji(advice: str) -> str:
     return _NEUT_EMOJI
 
 
+# A 股本土化动态颜色（评分 + 评级）
+# 评分：≥80 红（强多）/ 40-79 黄（中性）/ <40 绿（弱空）
+# 评级：买入看多 → 红   卖出看空 → 绿   观望 → 黄
+def _score_color(raw: Any) -> str:
+    try:
+        s = float(raw)
+        if s >= 80:
+            return "#fca5a5"    # 红 · 强多
+        elif s >= 40:
+            return "#fde047"    # 黄 · 中性
+        else:
+            return "#86efac"    # 绿 · 弱/空
+    except Exception:
+        return "#94a3b8"        # 灰 · 无数据
+
+
+def _advice_color(advice: str) -> str:
+    t = _norm(advice)
+    if any(w in t for w in _BULL_WORDS):
+        return "#fca5a5"    # 红
+    if any(w in t for w in _BEAR_WORDS):
+        return "#86efac"    # 绿
+    return "#fde047"        # 黄
+
+
+def _stock_info_strip(
+    idx: int, total: int,
+    name: str, code: str,
+    adv: str, score_raw: Any, dt_str: str,
+) -> str:
+    """渲染个股头部：序号[i/N] + 名称 + 代码 + 动态颜色评级 + 动态颜色评分 + 时间"""
+    score_str = _fmt_score(score_raw)
+    sc        = _score_color(score_raw)
+    ac        = _advice_color(adv)
+    adv_txt   = adv or "未评级"
+    # 评级前缀箭头
+    if any(w in adv_txt for w in _BULL_WORDS):
+        arr = "▲"
+    elif any(w in adv_txt for w in _BEAR_WORDS):
+        arr = "▼"
+    else:
+        arr = "◆"
+
+    return (
+        f"<div style='display:flex;align-items:center;gap:10px;"
+        f"padding:8px 14px;border-radius:8px;"
+        f"background:rgba(10,18,40,0.7);border:1px solid #1e3a5f;"
+        f"margin-bottom:12px;flex-wrap:wrap;'>"
+        # 序号
+        f"<span style='color:#475569;font-size:0.74em;font-family:monospace;"
+        f"font-weight:700;min-width:40px;'>[{idx}/{total}]</span>"
+        # 名称
+        f"<span style='color:#F1F5F9;font-weight:700;font-size:1.02em;'>{name}</span>"
+        # 代码
+        f"<span style='color:#64748B;font-size:0.82em;'>（{code}）</span>"
+        # 动态颜色评级
+        f"<span style='color:{ac};font-weight:700;font-size:0.86em;"
+        f"background:{ac}18;padding:2px 9px;border-radius:4px;"
+        f"border:1px solid {ac}55;'>{arr} {adv_txt}</span>"
+        # 动态颜色评分
+        f"<span style='color:{sc};font-weight:700;font-size:0.84em;"
+        f"font-family:monospace;'>情绪 {score_str}</span>"
+        # 时间（右对齐）
+        f"<span style='color:#475569;font-size:0.72em;margin-left:auto;'>{dt_str}</span>"
+        f"</div>"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 批次条目构建（带快照缓存，避免重复查询）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -575,31 +643,24 @@ with tab_stocks:
         st.divider()
 
         # 逐个渲染原始报告（expander 折叠，≤3只时自动展开）
-        auto_expand = len(stock_snaps) <= 3
+        total       = len(stock_snaps)
+        auto_expand = total <= 3
         for i, snap in enumerate(stock_snaps, start=1):
-            name    = _norm(snap.get("name")) or "—"
-            code    = _norm(snap.get("code")) or "—"
-            adv     = _norm(snap.get("operation_advice"))
-            score   = _fmt_score(snap.get("sentiment_score"))
-            dt_str  = _fmt_dt(snap.get("created_at"))
-            rpt_md  = _norm(snap.get("report_md"))
-            badge_h = _badge(adv)
+            name      = _norm(snap.get("name")) or "—"
+            code      = _norm(snap.get("code")) or "—"
+            adv       = _norm(snap.get("operation_advice"))
+            score_raw = snap.get("sentiment_score")
+            dt_str    = _fmt_dt(snap.get("created_at"))
+            rpt_md    = _norm(snap.get("report_md"))
 
+            # expander 标题：[序号/总数] 名称（代码）—— 评级
             with st.expander(
-                f"[{i:02d}] {name}（{code}）—— {adv or '未评级'}  评分 {score}",
+                f"[{i}/{total}] {name}（{code}）—— {adv or '未评级'}",
                 expanded=auto_expand,
             ):
-                # 个股头部信息行
+                # ★ 动态颜色信息条：序号 + 评级（红/绿/黄）+ 评分（红/绿/黄）+ 时间
                 st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:10px;"
-                    f"padding:6px 0 10px 0;border-bottom:1px solid #1e3a5f;"
-                    f"margin-bottom:12px;flex-wrap:wrap;'>"
-                    f"<span style='color:#F1F5F9;font-weight:700;font-size:1.05em;'>{name}</span>"
-                    f"<span style='color:#64748B;font-size:0.85em;'>（{code}）</span>"
-                    f"{badge_h}"
-                    f"<span style='color:#475569;font-size:0.74em;margin-left:auto;'>"
-                    f"{dt_str} &nbsp;·&nbsp; 情绪评分 {score}</span>"
-                    f"</div>",
+                    _stock_info_strip(i, total, name, code, adv, score_raw, dt_str),
                     unsafe_allow_html=True,
                 )
 

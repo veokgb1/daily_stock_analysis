@@ -1481,41 +1481,94 @@ def _render_text_preview(title: str, content: str, key: str, height: int = 260) 
 
 
 def _persist_run_artifacts(run_id: str, run_mode: str) -> None:
+    """
+    持久化本次分析批次的完整产物到 run_artifacts 表。
+    修复要点：
+      1. 报告保存原始 Markdown（不再经 _plain_text_report 转换）
+      2. schema_json 安全序列化（防止 Pydantic/非序列化对象导致静默崩溃）
+      3. 日志文件分两路读取，debug 路无独立文件时降级为主日志
+      4. 每步独立 try-except，任何单步失败不影响其余步骤
+    """
     if not run_id:
         return
 
+    # ── 步骤 1：收集原始 Markdown 报告 ────────────────────────────────────────
+    market_report_md = ""
+    stock_report_md  = ""
+    full_report_md   = ""
     try:
-        per_reports = st.session_state.get("per_stock_reports", {}) or {}
-        stock_report_md = "\n\n==========\n\n".join(
-            f"{code} {st.session_state.pool_names.get(code, code)}\n\n{_plain_text_report(report_md)}"
-            for code, report_md in per_reports.items()
-            if report_md
-        )
-        _, _, business_log_tail = _read_physical_log("stock_analysis", debug=False)
-        _, _, debug_log_tail = _read_physical_log("stock_analysis", debug=True)
-        schema_payload = {
-            "run_id": run_id,
-            "run_mode": run_mode,
-            "run_ts": st.session_state.get("run_ts", ""),
+        market_report_md = (st.session_state.get("market_report", "") or "").strip()
+        full_report_md   = (st.session_state.get("analysis_report", "") or "").strip()
+        per_reports      = st.session_state.get("per_stock_reports", {}) or {}
+        pool_names       = st.session_state.get("pool_names", {}) or {}
+        stock_parts = []
+        for code, report_md in per_reports.items():
+            if not report_md:
+                continue
+            display_name = pool_names.get(code, code)
+            stock_parts.append(f"## {display_name}（{code}）\n\n{report_md}")
+        stock_report_md = "\n\n---\n\n".join(stock_parts)
+        # 全量兜底：若 analysis_report 为空，则拼接大盘+个股
+        if not full_report_md and (market_report_md or stock_report_md):
+            segs = []
+            if market_report_md:
+                segs.append(f"# 大盘报告\n\n{market_report_md}")
+            if stock_report_md:
+                segs.append(f"# 个股报告\n\n{stock_report_md}")
+            full_report_md = "\n\n---\n\n".join(segs)
+    except Exception as exc:
+        logger.warning("_persist_run_artifacts 报告收集失败：%s", exc)
+
+    # ── 步骤 2：读取物理日志文件 ──────────────────────────────────────────────
+    business_log_tail = ""
+    debug_log_tail    = ""
+    try:
+        _, _, business_log_tail = _read_physical_log("webui_v8", debug=False)
+        _, _, debug_log_tail    = _read_physical_log("webui_v8", debug=True)
+        # 无独立 debug 文件时，从主日志提取 WARNING/ERROR 条目作为 debug 视图
+        if not debug_log_tail and business_log_tail:
+            debug_lines = [
+                ln for ln in business_log_tail.splitlines()
+                if any(tag in ln for tag in ("WARNING", "ERROR", "CRITICAL", "DEBUG"))
+            ]
+            debug_log_tail = "\n".join(debug_lines)
+    except Exception as exc:
+        logger.warning("_persist_run_artifacts 日志读取失败：%s", exc)
+
+    # ── 步骤 3：安全序列化 schema_json ────────────────────────────────────────
+    schema_json = "{}"
+    try:
+        schema_payload: dict = {
+            "run_id":       run_id,
+            "run_mode":     run_mode,
+            "run_ts":       st.session_state.get("run_ts", ""),
             "snapshot_ids": st.session_state.get("snapshot_ids", {}),
-            "snapshot_factors": st.session_state.get("snapshot_factors", {}),
-            "analysis_results": [
-                result.model_dump() if hasattr(result, "model_dump") else vars(result)
-                for result in st.session_state.get("analysis_results", []) or []
-            ],
         }
+        schema_json = json.dumps(schema_payload, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logger.warning("_persist_run_artifacts schema 序列化失败：%s", exc)
+        schema_json = json.dumps({"run_id": run_id, "run_mode": run_mode},
+                                 ensure_ascii=False)
+
+    # ── 步骤 4：写入数据库 ────────────────────────────────────────────────────
+    try:
         save_run_artifacts(
             run_id,
             run_mode=run_mode,
-            market_report_md=_plain_text_report(st.session_state.get("market_report", "") or ""),
+            market_report_md=market_report_md,
             stock_report_md=stock_report_md,
-            full_report_md=_plain_text_report(st.session_state.get("analysis_report", "") or ""),
+            full_report_md=full_report_md,
             business_log=business_log_tail or "",
             debug_log=debug_log_tail or "",
-            schema_json=json.dumps(schema_payload, ensure_ascii=False, indent=2),
+            schema_json=schema_json,
+        )
+        logger.info(
+            "run_artifacts 已写入：run_id=%s | market=%d chars | stock=%d chars | bizlog=%d chars",
+            run_id, len(market_report_md), len(stock_report_md),
+            len(business_log_tail or ""),
         )
     except Exception as exc:
-        logger.warning("save_run_artifacts:%s", exc)
+        logger.warning("save_run_artifacts 写入失败：%s", exc, exc_info=True)
 def _get_rt():
     from src.enums import ReportType
     cfg=get_config()
