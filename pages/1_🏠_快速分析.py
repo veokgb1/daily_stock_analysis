@@ -693,6 +693,30 @@ def _ingest_items(items: list, source: str, fallback_text: str = ""):
     queued = _queue_fuzzy_candidates(fuzzy_terms, source) if fuzzy_terms else 0
     return added, queued, len(good_items)
 
+def _dedupe_items_against_pool(items: list) -> tuple[list, int]:
+    existing_codes = {
+        _norm(code)
+        for code in (st.session_state.get("pool_codes") or [])
+        if re.match(r"^\d{6}$", str(code or "").strip())
+    }
+    fresh_items = []
+    staged_codes = set()
+    skipped = 0
+    for item in items or []:
+        code = str(item.get("code", "")).strip()
+        if re.match(r"^\d{6}$", code):
+            code = _norm(code)
+            if code in existing_codes or code in staged_codes:
+                skipped += 1
+                continue
+            cloned = dict(item)
+            cloned["code"] = code
+            fresh_items.append(cloned)
+            staged_codes.add(code)
+        else:
+            fresh_items.append(dict(item))
+    return fresh_items, skipped
+
 def _append_codes(codes: list, source: str = "manual") -> int:
     items = [{"name":c,"code":c,"valid":True,"source":source} for c in codes]
     return _append_items(items)
@@ -2414,15 +2438,17 @@ with tab_text:
                      type="secondary",key="btn_ext_text"):
             if raw_text.strip():
                 _reset_fuzzy_state()
-                with st.spinner("Gemini 正在识别股票名称并映射代码…"):
+                with st.spinner("正在呼叫 LLM 进行语义提取与黑话破译..."):
                     items=extract_from_text(raw_text)
                 if items:
-                    added, queued, parsed = _ingest_items(items, "text", fallback_text=raw_text)
+                    fresh_items, skipped_dup = _dedupe_items_against_pool(items)
+                    added, queued, parsed = _ingest_items(fresh_items, "text", fallback_text=raw_text)
                     if len(st.session_state.pool_codes)>_MAX_WARN:
                         st.warning(f"⚠️ 代码池已达 **{len(st.session_state.pool_codes)}** 只，**建议分批运行**。")
                     st.success(
                         f"✅ 有效入池 {parsed} 只"
                         + (f"，新增 {added} 只" if added else "")
+                        + (f"，忽略重复 {skipped_dup} 只" if skipped_dup else "")
                         + (f"，另有 {queued} 条进入模糊确认区" if queued else "")
                     )
                     st.rerun()
