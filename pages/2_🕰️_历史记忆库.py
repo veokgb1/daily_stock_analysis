@@ -24,6 +24,7 @@ from src.streamlit_guard import enforce_sidebar_password_gate
 from webui.db import (
     add_to_quick_pool,
     clear_all_data,
+    delete_run_permanently,
     delete_snapshot,
     get_code_history,
     get_run_artifacts,
@@ -51,6 +52,7 @@ st.session_state.setdefault("report_view_mode", "全量模式")
 st.session_state.setdefault("report_preset", "快速决策组合")
 st.session_state.setdefault("hide_pending_snap_id", None)
 st.session_state.setdefault("confirm_clear_all_data", False)
+st.session_state.setdefault("confirm_delete_run_id", None)
 
 PRESET_OPTIONS: List[str] = ["快速决策组合", "风险审查组合", "数据复盘组合"]
 
@@ -917,6 +919,127 @@ def _render_batch_navigation(run_rows: List[Dict[str, Any]]) -> None:
         st.rerun()
 
 
+def _build_run_entries(run_rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    for idx, row in enumerate(run_rows, start=1):
+        run_id = row.get("run_id")
+        if not run_id:
+            continue
+        batch_snaps = get_run_snapshots(run_id)
+        stock_names = [
+            s.get("name")
+            for s in batch_snaps
+            if s.get("code") != "__market__" and s.get("name")
+        ]
+        count = len(stock_names)
+        preview = "、".join(stock_names[:3]) + ("..." if count > 3 else "")
+        dt_str = _infer_run_time(batch_snaps)
+        entries.append({
+            "index": f"{idx:02d}",
+            "run_id": run_id,
+            "label": f"{dt_str}  │  {count}只  │  {preview or '暂无标的'}",
+            "caption": f"[{idx:02d}] {dt_str}",
+            "count_text": f"{count}只",
+            "preview": preview or "暂无标的",
+        })
+    return entries
+
+
+def _ensure_selected_run(entries: List[Dict[str, str]]) -> None:
+    run_ids = {entry["run_id"] for entry in entries}
+    current = st.session_state.get("selected_run_id")
+    if current not in run_ids:
+        st.session_state["selected_run_id"] = entries[0]["run_id"] if entries else None
+
+
+def _select_run(run_id: str) -> None:
+    if run_id != st.session_state.get("selected_run_id"):
+        st.session_state["selected_run_id"] = run_id
+        st.session_state["confirm_delete_run_id"] = None
+        st.rerun()
+
+
+def _render_recent_run_hub(entries: List[Dict[str, str]]) -> None:
+    st.markdown(
+        "<p style='color:#475569; font-size:0.75em; text-transform:uppercase; "
+        "letter-spacing:0.1em; margin-bottom:6px;'>最近 3 条核心批次</p>",
+        unsafe_allow_html=True,
+    )
+    if not entries:
+        st.caption("暂无可浏览批次。")
+        return
+    for entry in entries[:3]:
+        is_active = entry["run_id"] == st.session_state.get("selected_run_id")
+        button_label = f"{entry['caption']} · {entry['count_text']}"
+        if st.button(
+            button_label,
+            key=f"recent_run_{entry['run_id']}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            _select_run(entry["run_id"])
+        st.caption(entry["preview"])
+
+
+def _render_full_history_library(entries: List[Dict[str, str]]) -> None:
+    with st.expander("📂 完整历史记忆库", expanded=False):
+        if not entries:
+            st.caption("暂无历史批次。")
+            return
+
+        st.caption("完整批次已收纳在此，可切换查看并执行物理删除。")
+        for entry in entries:
+            run_id = entry["run_id"]
+            is_active = run_id == st.session_state.get("selected_run_id")
+            meta_cols = st.columns([6, 1.2, 1.6])
+            with meta_cols[0]:
+                st.markdown(
+                    f"**[{entry['index']}] {entry['caption']}**  \n"
+                    f"`{entry['count_text']}` · {entry['preview']}",
+                )
+            with meta_cols[1]:
+                if st.button(
+                    "查看",
+                    key=f"view_run_{run_id}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                ):
+                    _select_run(run_id)
+            with meta_cols[2]:
+                if st.button(
+                    "🗑️ 彻底删除",
+                    key=f"delete_run_{run_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state["confirm_delete_run_id"] = run_id
+                    st.rerun()
+
+            if st.session_state.get("confirm_delete_run_id") == run_id:
+                st.warning("将物理删除该批次的快照与 artifacts，且不可恢复。")
+                confirm_cols = st.columns([1.5, 1.2, 5])
+                with confirm_cols[0]:
+                    if st.button(
+                        "确认删除",
+                        key=f"confirm_delete_run_{run_id}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        delete_run_permanently(run_id)
+                        st.session_state["confirm_delete_run_id"] = None
+                        if st.session_state.get("selected_run_id") == run_id:
+                            st.session_state["selected_run_id"] = None
+                        st.rerun()
+                with confirm_cols[1]:
+                    if st.button(
+                        "取消",
+                        key=f"cancel_delete_run_{run_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["confirm_delete_run_id"] = None
+                        st.rerun()
+            st.divider()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 九、批次报告阅读区（三 Tab + 三模式 + 下载矩阵）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1082,10 +1205,16 @@ def _render_batch_mode(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 十、侧边栏（过滤条件 + 危险区）
+# 十、侧边栏（最近 3 条 + 过滤条件 + 危险区）
 # ─────────────────────────────────────────────────────────────────────────────
 
+run_rows = list_recent_runs(limit=None)
+run_entries = _build_run_entries(run_rows)
+_ensure_selected_run(run_entries)
+
 with st.sidebar:
+    st.divider()
+    _render_recent_run_hub(run_entries)
     st.divider()
     st.markdown(
         "<p style='color:#475569; font-size:0.75em; text-transform:uppercase; "
@@ -1109,6 +1238,8 @@ with st.sidebar:
             ):
                 clear_all_data()
                 st.session_state["confirm_clear_all_data"] = False
+                st.session_state["confirm_delete_run_id"] = None
+                st.session_state["selected_run_id"] = None
                 st.success("数据已全部清空")
                 st.rerun()
 
@@ -1124,14 +1255,33 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-run_rows      = list_recent_runs(limit=limit)
 all_snapshots = get_snapshots_with_filters(limit=max(limit * 3, 120))
 precise_code  = _resolve_precise_code(keyword, all_snapshots)
 advice_value  = None if advice_filter == "全部" else advice_filter
 trend_value   = None if trend_filter == "全部" else trend_filter
 
-# ZONE B：批次导航条
-_render_batch_navigation(run_rows)
+# ZONE B：最近批次摘要 + 完整历史库
+if run_entries[:3]:
+    hub_cols = st.columns(min(len(run_entries[:3]), 3))
+    for col, entry in zip(hub_cols, run_entries[:3]):
+        with col:
+            is_active = entry["run_id"] == st.session_state.get("selected_run_id")
+            st.markdown(
+                f"**[{entry['index']}] {entry['count_text']}**  \n"
+                f"{entry['caption']}  \n"
+                f"{entry['preview']}",
+            )
+            if st.button(
+                "查看该批次",
+                key=f"top_run_{entry['run_id']}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                _select_run(entry["run_id"])
+else:
+    st.caption("暂无可浏览的分析批次。")
+
+_render_full_history_library(run_entries)
 st.divider()
 
 # 机要区占位（保证页面底部永远有内容）

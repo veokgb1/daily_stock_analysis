@@ -495,24 +495,25 @@ def update_watchlist_alert_status(code: str, alert_status: str) -> None:
         )
 
 
-def list_recent_runs(limit: int = 30) -> List[Dict[str, Any]]:
+def list_recent_runs(limit: Optional[int] = 30) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            run_id,
+            GROUP_CONCAT(name || '(' || code || ')', ' · ') AS stocks,
+            COUNT(*)        AS stock_count,
+            MAX(created_at) AS run_time,
+            run_mode
+        FROM analysis_snapshots
+        WHERE COALESCE(is_visible, 1) = 1
+        GROUP BY run_id
+        ORDER BY MAX(created_at) DESC
+    """
+    params: List[Any] = []
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     with _get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                run_id,
-                GROUP_CONCAT(name || '(' || code || ')', ' · ') AS stocks,
-                COUNT(*)        AS stock_count,
-                MAX(created_at) AS run_time,
-                run_mode
-            FROM analysis_snapshots
-            WHERE COALESCE(is_visible, 1) = 1
-            GROUP BY run_id
-            ORDER BY MAX(created_at) DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -643,6 +644,12 @@ def delete_snapshot(snapshot_id: int) -> None:
             "UPDATE analysis_snapshots SET is_visible = 0 WHERE id = ?",
             (snapshot_id,),
         )
+
+
+def delete_run_permanently(run_id: str) -> None:
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM analysis_snapshots WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_artifacts WHERE run_id = ?", (run_id,))
 
 
 def clear_all_data() -> None:
