@@ -229,6 +229,7 @@ _SS = {
     "watchlist_feedback": "",
     "analysis_report":   "",
     "market_report":     "",
+    "report_panel_hidden": False,
     "voice_transcript":  "",
     # ── Input Wizard ──────────────────────────────────────────────────────────
     "iw_market":       "A",    # 当前市场选择：A / HK / US
@@ -2891,6 +2892,7 @@ if run_clicked and not st.session_state.is_running:
     st.session_state.run_requested = True
     st.session_state.pause_flag = False
     st.session_state.stop_flag = False
+    st.session_state.report_panel_hidden = False
     st.session_state.snapshot_ids = {}
     st.session_state.snapshot_factors = {}
     st.session_state.watchlist_feedback = ""
@@ -2968,92 +2970,111 @@ if st.session_state.elapsed_sec>0:
         unsafe_allow_html=True)
     st.write("")
 
-# 个股结果
-if st.session_state.analysis_results:
-    results =st.session_state.analysis_results
-    per_rpts=st.session_state.per_stock_reports
-    report  =st.session_state.analysis_report
-    ts_lbl  =st.session_state.run_ts
-    tracked_codes = {item["code"] for item in list_watchlist()}
+_report_hidden = bool(st.session_state.get("report_panel_hidden", False))
+if _has_any:
+    _report_ctrl_btn, _report_ctrl_hint = st.columns([1.2, 8])
+    with _report_ctrl_btn:
+        if _report_hidden:
+            if st.button("📂 重新展开", key="btn_expand_report", type="secondary"):
+                st.session_state.report_panel_hidden = False
+                st.rerun()
+        else:
+            if st.button("👁️ 隐藏当前报告", key="btn_hide_report", type="secondary"):
+                st.session_state.report_panel_hidden = True
+                st.rerun()
+    with _report_ctrl_hint:
+        if _report_hidden:
+            st.caption("👁️ 报告已折叠隐藏 (数据已缓存)")
 
-    st.markdown(f"## 🧮 「{ts_lbl}」个股决策仪表盘")
-    if st.session_state.watchlist_feedback:
-        st.success(st.session_state.watchlist_feedback)
+if not _report_hidden:
+    # 个股结果
+    if st.session_state.analysis_results:
+        results =st.session_state.analysis_results
+        per_rpts=st.session_state.per_stock_reports
+        report  =st.session_state.analysis_report
+        ts_lbl  =st.session_state.run_ts
+        tracked_codes = {item["code"] for item in list_watchlist()}
 
-    for rs in range(0,len(results),4):
-        row=results[rs:rs+4]; cols=st.columns(len(row))
-        for col,r in zip(cols,row):
-            with col:
-                _render_result_metric(col, r)
-                if r.code in tracked_codes:
-                    st.button(
-                        "✅ 已在跟踪池",
-                        key=f"btn_watch_done_{r.code}",
-                        use_container_width=True,
-                        disabled=True,
-                    )
-                else:
-                    if st.button("⭐ 加入跟踪池", key=f"btn_watch_{r.code}", use_container_width=True):
-                        try:
-                            snapshot_id = st.session_state.snapshot_ids.get(r.code)
-                            factors = st.session_state.snapshot_factors.get(r.code, {})
-                            add_to_watchlist(
-                                code=r.code,
-                                name=r.name,
-                                snapshot_id=snapshot_id,
-                                run_id=st.session_state.run_id or None,
-                                factors=factors,
-                            )
-                            st.session_state.watchlist_feedback = f"✅ 已将 {r.name}（{r.code}）加入跟踪池"
-                        except Exception as exc:
-                            st.session_state.watchlist_feedback = f"❌ 加入跟踪池失败：{exc}"
-                        st.rerun()
+        st.markdown(f"## 🧮 「{ts_lbl}」个股决策仪表盘")
+        if st.session_state.watchlist_feedback:
+            st.success(st.session_state.watchlist_feedback)
+
+        for rs in range(0,len(results),4):
+            row=results[rs:rs+4]; cols=st.columns(len(row))
+            for col,r in zip(cols,row):
+                with col:
+                    _render_result_metric(col, r)
+                    if r.code in tracked_codes:
+                        st.button(
+                            "✅ 已在跟踪池",
+                            key=f"btn_watch_done_{r.code}",
+                            use_container_width=True,
+                            disabled=True,
+                        )
+                    else:
+                        if st.button("⭐ 加入跟踪池", key=f"btn_watch_{r.code}", use_container_width=True):
+                            try:
+                                snapshot_id = st.session_state.snapshot_ids.get(r.code)
+                                factors = st.session_state.snapshot_factors.get(r.code, {})
+                                add_to_watchlist(
+                                    code=r.code,
+                                    name=r.name,
+                                    snapshot_id=snapshot_id,
+                                    run_id=st.session_state.run_id or None,
+                                    factors=factors,
+                                )
+                                st.session_state.watchlist_feedback = f"✅ 已将 {r.name}（{r.code}）加入跟踪池"
+                            except Exception as exc:
+                                st.session_state.watchlist_feedback = f"❌ 加入跟踪池失败：{exc}"
+                            st.rerun()
+        st.write("")
+
+        _valid=[(r,per_rpts[r.code]) for r in results if r.code in per_rpts]
+        if len(_valid)>=2:
+            _tabs=st.tabs([f"{r.name}（{r.code}）" for r,_ in _valid]+["📋 完整聚合报告"])
+            for tab,(r,md) in zip(_tabs[:-1],_valid):
+                with tab: st.markdown(md)
+            with _tabs[-1]: st.markdown(report)
+        elif _valid: st.markdown(_valid[0][1])
+        else: st.markdown(report)
+
+        st.write("")
+        _d1,_d2=st.columns(2)
+        _tfn=ts_lbl.replace(" ","_").replace(":","")
+        _report_txt = _plain_text_report(report)
+        with _d1:
+            st.download_button("📋 下载完整 TXT 报告",
+                data=_report_txt.encode("utf-8"),
+                file_name=_report_filename("full_report", _tfn),
+                mime="text/plain",use_container_width=True,key="dl_agg")
+        with _d2:
+            _all_per="\n\n==========\n\n".join(
+                f"{r.name}（{r.code}）\n\n"+_plain_text_report(per_rpts.get(r.code,""))
+                for r in results)
+            st.download_button("🗂️ 下载逐股 TXT 报告",
+                data=_all_per.encode("utf-8"),
+                file_name=_report_filename("stock_report", _tfn),
+                mime="text/plain",use_container_width=True,key="dl_per")
+        _render_text_preview("完整报告 TXT 预览", _report_txt, key="report_preview_agg", height=260)
+        _render_text_preview("逐股报告 TXT 预览", _all_per, key="report_preview_per", height=260)
+        st.divider()
+
+    # 大盘复盘
+    if st.session_state.market_report:
+        _tl=st.session_state.run_ts
+        st.markdown(f"## 🌍 「{_tl}」大盘复盘报告")
+        st.markdown(st.session_state.market_report)
+        _market_txt = _plain_text_report(st.session_state.market_report)
+        st.download_button(
+            "📥 下载大盘复盘 TXT",
+            data=_market_txt.encode("utf-8"),
+            file_name=_report_filename("market_review", datetime.now().strftime('%Y%m%d_%H%M%S')),
+            mime="text/plain",
+            key="dl_market_business_unique",
+        )
+        _render_text_preview("大盘复盘 TXT 预览", _market_txt, key="report_preview_market", height=240)
+else:
     st.write("")
-
-    _valid=[(r,per_rpts[r.code]) for r in results if r.code in per_rpts]
-    if len(_valid)>=2:
-        _tabs=st.tabs([f"{r.name}（{r.code}）" for r,_ in _valid]+["📋 完整聚合报告"])
-        for tab,(r,md) in zip(_tabs[:-1],_valid):
-            with tab: st.markdown(md)
-        with _tabs[-1]: st.markdown(report)
-    elif _valid: st.markdown(_valid[0][1])
-    else: st.markdown(report)
-
-    st.write("")
-    _d1,_d2=st.columns(2)
-    _tfn=ts_lbl.replace(" ","_").replace(":","")
-    _report_txt = _plain_text_report(report)
-    with _d1:
-        st.download_button("📋 下载完整 TXT 报告",
-            data=_report_txt.encode("utf-8"),
-            file_name=_report_filename("full_report", _tfn),
-            mime="text/plain",use_container_width=True,key="dl_agg")
-    with _d2:
-        _all_per="\n\n==========\n\n".join(
-            f"{r.name}（{r.code}）\n\n"+_plain_text_report(per_rpts.get(r.code,""))
-            for r in results)
-        st.download_button("🗂️ 下载逐股 TXT 报告",
-            data=_all_per.encode("utf-8"),
-            file_name=_report_filename("stock_report", _tfn),
-            mime="text/plain",use_container_width=True,key="dl_per")
-    _render_text_preview("完整报告 TXT 预览", _report_txt, key="report_preview_agg", height=260)
-    _render_text_preview("逐股报告 TXT 预览", _all_per, key="report_preview_per", height=260)
-    st.divider()
-
-# 大盘复盘
-if st.session_state.market_report:
-    _tl=st.session_state.run_ts
-    st.markdown(f"## 🌍 「{_tl}」大盘复盘报告")
-    st.markdown(st.session_state.market_report)
-    _market_txt = _plain_text_report(st.session_state.market_report)
-    st.download_button(
-        "📥 下载大盘复盘 TXT",
-        data=_market_txt.encode("utf-8"),
-        file_name=_report_filename("market_review", datetime.now().strftime('%Y%m%d_%H%M%S')),
-        mime="text/plain",
-        key="dl_market_business_unique",
-    )
-    _render_text_preview("大盘复盘 TXT 预览", _market_txt, key="report_preview_market", height=240)
 
 st.divider()
 
