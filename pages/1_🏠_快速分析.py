@@ -189,6 +189,10 @@ st.set_page_config(
 )
 enforce_sidebar_password_gate()
 
+_FAST_PAGE_ID = "quick_analysis"
+_fast_page_entered = st.session_state.get("_active_streamlit_page") != _FAST_PAGE_ID
+st.session_state["_active_streamlit_page"] = _FAST_PAGE_ID
+
 # =============================================================================
 # Session State
 # =============================================================================
@@ -240,6 +244,25 @@ for _k, _v in _SS.items():
     st.session_state.setdefault(
         _k, _v.copy() if isinstance(_v, (set, list, dict)) else _v
     )
+
+_FAST_WIDGET_PREFIXES = (
+    "iw_q_",
+    "iw_search_",
+    "cb_",
+    "cart_keep_",
+    "fuzzy_use_",
+    "fuzzy_pick_",
+    "tag_",
+)
+_FAST_WIDGET_KEYS = {
+    "iw_market_radio",
+    "iw_searchbox_locked",
+    "iw_searchbox_loading",
+    "sb_run_mode",
+    "main_run_mode",
+    "sg_name",
+    "sg_desc",
+}
 
 _schedule_catalog_daily_refresh()
 _flush_catalog_update_notices()
@@ -391,6 +414,118 @@ if not _ok:
 # =============================================================================
 def _norm(c: str) -> str:
     return canonical_stock_code(c.strip())
+
+
+def _copy_state_value(value):
+    return value.copy() if isinstance(value, (set, list, dict)) else value
+
+
+def _clear_fast_analysis_widget_state(*, keep_keys: set | None = None) -> None:
+    keep = keep_keys or set()
+    for key in list(st.session_state.keys()):
+        if key in keep:
+            continue
+        if key in _FAST_WIDGET_KEYS or any(key.startswith(prefix) for prefix in _FAST_WIDGET_PREFIXES):
+            st.session_state.pop(key, None)
+
+
+def _normalize_fast_analysis_pool_state() -> None:
+    raw_pool = st.session_state.get("pool_codes") or []
+    pool = []
+    seen = set()
+    for raw_code in raw_pool:
+        code = str(raw_code or "").strip()
+        if not code:
+            continue
+        try:
+            code = _norm(code)
+        except Exception:
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        pool.append(code)
+
+    raw_checked = st.session_state.get("checked_codes") or set()
+    checked = set()
+    for raw_code in raw_checked:
+        code = str(raw_code or "").strip()
+        if not code:
+            continue
+        try:
+            code = _norm(code)
+        except Exception:
+            continue
+        if code in seen:
+            checked.add(code)
+
+    raw_sources = dict(st.session_state.get("pool_sources") or {})
+    raw_names = dict(st.session_state.get("pool_names") or {})
+    pool_sources = {}
+    pool_names = {}
+    for code in pool:
+        pool_sources[code] = str(raw_sources.get(code) or "manual")
+        pool_names[code] = (
+            str(raw_names.get(code) or "").strip()
+            or STOCK_NAME_MAP.get(code, "")
+            or _catalog.lookup(code, market=st.session_state.get("iw_market", "A"))
+            or code
+        )
+
+    st.session_state.pool_codes = pool
+    st.session_state.checked_codes = checked
+    st.session_state.pool_sources = pool_sources
+    st.session_state.pool_names = pool_names
+
+
+def _sync_fast_analysis_widget_state_from_session() -> None:
+    pool = st.session_state.get("pool_codes") or []
+    checked = set(st.session_state.get("checked_codes") or set())
+    keep_keys = set()
+    for code in pool:
+        is_checked = code in checked
+        cb_key = f"cb_{code}"
+        cart_key = f"cart_keep_{code}"
+        st.session_state[cb_key] = is_checked
+        st.session_state[cart_key] = is_checked
+        keep_keys.add(cb_key)
+        keep_keys.add(cart_key)
+
+    market = st.session_state.get("iw_market", "A")
+    st.session_state["iw_market_radio"] = {
+        "A": "🇨🇳 A股",
+        "HK": "🇭🇰 港股",
+        "US": "🇺🇸 美股",
+    }.get(market, "🇨🇳 A股")
+    st.session_state["sb_run_mode"] = st.session_state.get("run_mode", _MODES[0])
+    st.session_state["main_run_mode"] = st.session_state.get("run_mode", _MODES[0])
+    keep_keys.update({"iw_market_radio", "sb_run_mode", "main_run_mode"})
+    _clear_fast_analysis_widget_state(keep_keys=keep_keys)
+
+
+def _clear_pool_session_state() -> None:
+    st.session_state.pool_codes = []
+    st.session_state.checked_codes = set()
+    st.session_state.pool_sources = {}
+    st.session_state.pool_names = {}
+    st.session_state.fuzzy_candidates = []
+    st.session_state["iw_pending"] = None
+    st.session_state["iw_commit_requested"] = False
+    st.session_state["iw_should_focus"] = False
+    st.session_state["iw_input_gen"] = st.session_state.get("iw_input_gen", 0) + 1
+    _clear_fast_analysis_widget_state()
+
+
+def _clear_fast_analysis_state() -> None:
+    for key, value in _SS.items():
+        st.session_state[key] = _copy_state_value(value)
+    st.session_state["iw_commit_requested"] = False
+    _clear_fast_analysis_widget_state()
+
+
+_normalize_fast_analysis_pool_state()
+if _fast_page_entered:
+    _sync_fast_analysis_widget_state_from_session()
 
 def _append_items(items: list) -> int:
     """将 StockItem 列表增量追加到代码池，返回实际新增数。"""
@@ -988,13 +1123,7 @@ def _wizard_body() -> None:
             use_container_width=True,
             type="secondary",
         ):
-            st.session_state.pool_codes    = []
-            st.session_state.checked_codes = set()
-            st.session_state.pool_sources  = {}
-            st.session_state.pool_names    = {}
-            _reset_fuzzy_state()
-            # 轮转 key 同步清空输入框，不写已实例化的 widget state
-            st.session_state["iw_input_gen"] = st.session_state.get("iw_input_gen", 0) + 1
+            _clear_pool_session_state()
             st.rerun()
 
     # ── 候选芯片区 ────────────────────────────────────────────────────────
@@ -1173,12 +1302,7 @@ def _wizard_body_searchbox() -> None:
             use_container_width=True,
             type="secondary",
         ):
-            st.session_state.pool_codes = []
-            st.session_state.checked_codes = set()
-            st.session_state.pool_sources = {}
-            st.session_state.pool_names = {}
-            _reset_fuzzy_state()
-            st.session_state["iw_input_gen"] = st.session_state.get("iw_input_gen", 0) + 1
+            _clear_pool_session_state()
             st.rerun()
 
     if st.session_state.get("iw_commit_requested"):
@@ -2419,6 +2543,8 @@ if st.session_state.fuzzy_candidates:
 # =============================================================================
 _quick_pool_added = _ingest_quick_pool_cache()
 if _quick_pool_added:
+    _normalize_fast_analysis_pool_state()
+    _sync_fast_analysis_widget_state_from_session()
     st.toast(f"已从历史记忆库自动导入 {_quick_pool_added} 只股票到代码池")
 
 pool    = st.session_state.pool_codes
@@ -2452,9 +2578,7 @@ if pool:
             st.session_state.checked_codes=set(); st.rerun()
     with _b4:
         if st.button("🗑️ 清空代码池",use_container_width=True,key="btn_clrpool"):
-            st.session_state.pool_codes=[]; st.session_state.checked_codes=set()
-            st.session_state.pool_sources={}; st.session_state.pool_names={}
-            _reset_fuzzy_state()
+            _clear_pool_session_state()
             st.rerun()
 
 # 重读（批量操作后同步刷新）
@@ -2681,13 +2805,7 @@ _has   = len(final_codes)>0
 _cr,_cc=st.columns([5,1])
 with _cc:
     if st.button("🗑️ 全清", use_container_width=True, key="btn_clear_all"):
-        # 1. 重置所有业务逻辑状态到初始值
-        for k, v in _SS.items():
-            st.session_state[k] = v.copy() if isinstance(v, (set, list, dict)) else v
-        # 2. 同步删除 widget state 键（不在 _SS 中但与逻辑值绑定）
-        #    若不删除，这些 widget 会在下次渲染时用旧的 widget state 覆盖上面的重置值
-        for _wk in ("iw_market_radio", "sb_run_mode", "main_run_mode", "iw_input_gen"):
-            st.session_state.pop(_wk, None)
+        _clear_fast_analysis_state()
         st.rerun()
 with _cr:
     run_clicked=cart_run_clicked or st.button(

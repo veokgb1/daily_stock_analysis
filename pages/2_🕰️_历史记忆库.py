@@ -42,6 +42,9 @@ st.set_page_config(
 )
 enforce_sidebar_password_gate()
 
+_HISTORY_PAGE_ID = "history_memory"
+st.session_state["_active_streamlit_page"] = _HISTORY_PAGE_ID
+
 # ── Session state 初始化 ──────────────────────────────────────────────────────
 st.session_state.setdefault("selected_run_id", None)
 st.session_state.setdefault("report_view_mode", "全量模式")
@@ -249,6 +252,12 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _artifact_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
 def _plain_text_report(value: Any) -> str:
     return markdown_to_plain_text(_normalize_text(value))
 
@@ -438,8 +447,8 @@ def _get_batch_artifacts_payload(
             or _plain_text_report(_build_stock_report_text(stock_snaps)),
         "full_report_md": _plain_text_report(artifacts.get("full_report_md"))
             or _plain_text_report(_build_batch_download_text(run_id, batch_snaps)),
-        "business_log": _normalize_text(artifacts.get("business_log")),
-        "debug_log": _normalize_text(artifacts.get("debug_log")),
+        "business_log": _artifact_text(artifacts.get("business_log")),
+        "debug_log": _artifact_text(artifacts.get("debug_log")),
         "schema_json": _normalize_text(artifacts.get("schema_json"))
             or _build_batch_schema_json(run_id, batch_snaps),
     }
@@ -1159,10 +1168,12 @@ st.markdown(
 )
 
 # ── 统一提取：确保 text_area 与 download_button 100% 使用同一份变量 ──────────
-# 从 _secret 中安全读取，空字符串统一视为"无数据"
-_biz_log: str = (_secret.get("business_log") or "").strip()
-_dbg_log: str = (_secret.get("debug_log") or "").strip()
+# 从 _secret 中安全读取，保留 artifacts 原始文本，避免显示/下载不一致
+_biz_log: str = _artifact_text(_secret.get("business_log"))
+_dbg_log: str = _artifact_text(_secret.get("debug_log"))
 _slug:    str = _secret.get("run_date_slug") or datetime.now().strftime("%Y%m%d_%H%M%S")
+_biz_log_display = _biz_log if _biz_log else "暂无运行日志"
+_dbg_log_display = _dbg_log if _dbg_log else "暂无通信日志"
 
 sec_col1, sec_col2 = st.columns(2)
 
@@ -1171,14 +1182,14 @@ with sec_col1:
     with st.expander("📋 运行日志（Business Log）", expanded=False):
         st.text_area(
             label="",
-            value=_biz_log if _biz_log else "暂无运行日志",
+            value=_biz_log_display,
             height=300,
             disabled=True,
             key="history_business_log",
         )
         st.download_button(
             label="⬇️ 下载运行日志",
-            data=_biz_log if _biz_log else "（暂无运行日志）",
+            data=_biz_log,
             file_name=_report_filename("business_log", _slug),
             mime="text/plain",
             use_container_width=True,
@@ -1190,14 +1201,14 @@ with sec_col2:
     with st.expander("🔧 通信日志（Debug Log）", expanded=False):
         st.text_area(
             label="",
-            value=_dbg_log if _dbg_log else "暂无通信日志",
+            value=_dbg_log_display,
             height=300,
             disabled=True,
             key="history_debug_log",
         )
         st.download_button(
             label="⬇️ 下载通信日志",
-            data=_dbg_log if _dbg_log else "（暂无通信日志）",
+            data=_dbg_log,
             file_name=_report_filename("debug_log", _slug),
             mime="text/plain",
             use_container_width=True,
