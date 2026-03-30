@@ -110,7 +110,7 @@ def _items_from_parsed(parsed: Optional[list], source: str) -> List[StockItem]:
         name = str(obj.get("name", "")).strip()
         code_raw = str(obj.get("code", "")).strip()
         confidence = _coerce_confidence(obj.get("confidence"))
-        if confidence is not None and confidence < 0.65:
+        if confidence is not None and confidence < 0.3:
             continue
         code = re.sub(r"[^\d]", "", code_raw).zfill(6)
         if (re.match(r"^\d{6}$", code)
@@ -152,6 +152,16 @@ def _parse_llm_json(raw_text: str) -> Optional[list]:
             return result
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
+
+    greedy_match = re.search(r"\[.*\]", text, re.DOTALL)
+    if greedy_match:
+        chunk = greedy_match.group(0).strip()
+        try:
+            result = _coerce_list(json.loads(chunk))
+            if result is not None:
+                return result
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
 
     fence_chunks = re.findall(r"```(?:json)?\s*([\s\S]*?)```", raw_text or "", flags=re.IGNORECASE)
     for chunk in fence_chunks:
@@ -228,7 +238,7 @@ _TEXT_MAPPING_PROMPT = """
 2. 如果文本里只有模糊影射，但无法高置信确认，请直接丢弃，宁缺毋滥，不要猜测，不要硬编。
 3. 同一只股票即使被多次提及，也只输出一次。
 4. 只提取股票，不要把行业、产品、人物、题材词误判成股票。
-5. 仅输出高置信条目。若 confidence 低于 0.65，请不要输出该条。
+5. 仅过滤极低置信条目。若 confidence 低于 0.3，请不要输出该条。
 
 输出规则：
 - 只能输出 JSON 数组，不要解释，不要 Markdown，不要前后缀。
@@ -309,12 +319,16 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
             temperature=0,
         )
         raw_text = _extract_message_text(getattr(resp.choices[0].message, "content", ""))
+        print(f"\n{'='*20} [DEBUG: LLM RAW RESPONSE] {'='*20}\n{raw_text}\n{'='*60}\n")
         logger.debug("[ExtractEngine] %s raw response: %s", label, raw_text[:300])
         try:
             parsed = _parse_llm_json(raw_text)
         except Exception as exc:
+            print(f"\n{'='*20} [DEBUG: LLM PARSE ERROR] {'='*20}\nlabel={label}\nerror={exc}\n{'='*60}\n")
             logger.warning("[ExtractEngine] %s parse failed: %s", label, exc)
             return []
+        if parsed is None:
+            print(f"\n{'='*20} [DEBUG: LLM PARSE EMPTY] {'='*20}\nlabel={label}\nreason=parse returned None\n{'='*60}\n")
         return _items_from_parsed(parsed, source)
 
     if client:
@@ -328,8 +342,10 @@ def llm_map_to_items(content: str, source: str = "text", is_voice: bool = False)
             if items:
                 logger.info("[ExtractEngine] retry extraction succeeded with %s items", len(items))
                 return items
+            print(f"\n{'='*20} [DEBUG: LLM EMPTY RESULT] {'='*20}\nsource={source}\nreason=no parseable or high-confidence items after retry\n{'='*60}\n")
             logger.warning("[ExtractEngine] LLM returned no parseable stock JSON after retry")
         except Exception as exc:
+            print(f"\n{'='*20} [DEBUG: LLM CALL ERROR] {'='*20}\nsource={source}\nerror={exc}\n{'='*60}\n")
             logger.warning("[ExtractEngine] LLM call failed: %s", exc)
 
     has_named_signal = bool(re.search(r"[\u4e00-\u9fffA-Za-z]", content))
