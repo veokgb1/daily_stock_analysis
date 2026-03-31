@@ -12,7 +12,7 @@
 
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List, Optional
@@ -21,13 +21,23 @@ from typing import List, Optional
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(pathname)s:%(lineno)d | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# 强制使用 Asia/Shanghai (UTC+8) 时区，避免云端日志显示 UTC 时间
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
 
 class RelativePathFormatter(logging.Formatter):
-    """自定义 Formatter，输出相对路径而非绝对路径"""
+    """自定义 Formatter：相对路径 + 强制 Asia/Shanghai (UTC+8) 时间戳"""
 
     def __init__(self, fmt=None, datefmt=None, relative_to=None):
         super().__init__(fmt, datefmt)
         self.relative_to = Path(relative_to) if relative_to else Path.cwd()
+
+    def formatTime(self, record: logging.LogRecord, datefmt=None) -> str:
+        """覆盖时间格式化，强制输出 UTC+8 时间而非系统 UTC 时间。"""
+        ct = datetime.fromtimestamp(record.created, tz=_SHANGHAI_TZ)
+        if datefmt:
+            return ct.strftime(datefmt)
+        return ct.strftime(LOG_DATE_FORMAT)
 
     def format(self, record):
         # 将绝对路径转为相对路径

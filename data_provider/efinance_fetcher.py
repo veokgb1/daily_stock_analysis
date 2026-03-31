@@ -106,6 +106,38 @@ class EfinanceRealtimeQuote:
 
 logger = logging.getLogger(__name__)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 【重要备忘录】因当前主力数据源为 Tushare，故强制禁用 efinance 缓存以避开云端权限报错。
+# 若未来 Tushare Token 失效或被替换，需在此处考虑恢复缓存机制。
+# ──────────────────────────────────────────────────────────────────────────────
+# efinance 内部通过 joblib / requests_cache 将数据写入 HOME 或 site-packages 目录。
+# 在 Streamlit Cloud 等只读云端环境，系统目录不可写，触发 [Errno 13] Permission denied。
+# 修复：① 将所有缓存类路径重定向到项目内可写目录；② 无论是否只读均设 EFINANCE_HOME。
+_EF_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "temp", "efinance",
+)
+try:
+    os.makedirs(_EF_CACHE_DIR, exist_ok=True)
+except Exception:
+    _EF_CACHE_DIR = os.path.join(os.path.abspath("."), "data", "temp", "efinance")
+    os.makedirs(_EF_CACHE_DIR, exist_ok=True)
+
+_home = os.path.expanduser("~")
+if not os.access(_home, os.W_OK):
+    # 云端只读环境：将 HOME 及 XDG 缓存路径全部重定向到可写目录
+    os.environ["HOME"]           = _EF_CACHE_DIR
+    os.environ["XDG_CACHE_HOME"] = os.path.join(_EF_CACHE_DIR, ".cache")
+    os.environ["XDG_DATA_HOME"]  = os.path.join(_EF_CACHE_DIR, ".local", "share")
+    logger.info("[efinance] 系统 HOME 不可写，缓存已重定向至 %s", _EF_CACHE_DIR)
+# 任何情况下均设置 EFINANCE_HOME，供 efinance 各版本识别
+os.environ.setdefault("EFINANCE_HOME", _EF_CACHE_DIR)
+
+# 重试控制参数（顶部暴露，便于调参）
+# 首次请求立即执行；只在捕获网络异常后才休眠 RETRY_DELAY_BASE 秒（指数退避）
+MAX_RETRIES      = 3    # 最大重试次数（原设 1，已修复）
+RETRY_DELAY_BASE = 2.0  # 指数退避基准延迟（秒）
+
 EASTMONEY_HISTORY_ENDPOINT = "push2his.eastmoney.com/api/qt/stock/kline/get"
 
 
@@ -324,14 +356,16 @@ class EfinanceFetcher(BaseFetcher):
         self._last_request_time = time.time()
     
     @retry(
-        stop=stop_after_attempt(1),  # 减少到1次，避免触发限流
-        wait=wait_exponential(multiplier=1, min=4, max=60),  # 保持等待时间设置
+        stop=stop_after_attempt(MAX_RETRIES),
+        wait=wait_exponential(multiplier=1, min=RETRY_DELAY_BASE, max=30),
         retry=retry_if_exception_type((
             ConnectionError,
             TimeoutError,
+            OSError,                                      # 含 PermissionError（缓存写失败兜底）
             requests.exceptions.RequestException,
             requests.exceptions.ConnectionError,
-            requests.exceptions.ChunkedEncodingError
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
         )),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )

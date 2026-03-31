@@ -3029,12 +3029,13 @@ if st.session_state.is_running and st.session_state.run_requested:
             else:
                 _sc.update(label=f"✅ 分析全部完成，总耗时 {_el:.1f}s",
                            state="complete",expanded=False)
-            _persist_run_artifacts(_run_id, _mode)
         except Exception as _exc:
-            logger.exception(f"椤跺眰寮傚父:{_exc}")
+            logger.exception("顶层运行异常: %s", _exc)
             st.session_state.last_error=str(_exc)
             _sc.update(label=f"❌ 运行异常：{_exc}",state="error",expanded=True)
         finally:
+            # 落盘移至 finally：无论成功/失败/异常，run_artifacts 必然写入
+            _persist_run_artifacts(_run_id, _mode)
             st.session_state.is_running = False
             st.session_state.run_requested = False
             st.session_state.pause_flag = False
@@ -3157,8 +3158,9 @@ else:
 
 st.divider()
 
-_biz_log_path, _biz_log_raw, _biz_log_tail = _read_physical_log("stock_analysis", debug=False)
-_debug_log_path, _debug_log_raw, _debug_log_tail = _read_physical_log("stock_analysis", debug=True)
+# 前缀必须与 setup_logging(log_prefix="webui_v8") 保持一致
+_biz_log_path, _biz_log_raw, _biz_log_tail = _read_physical_log("webui_v8", debug=False)
+_debug_log_path, _debug_log_raw, _debug_log_tail = _read_physical_log("webui_v8", debug=True)
 _debug_log_warn = (
     _debug_log_path is None
     or _biz_log_path is None
