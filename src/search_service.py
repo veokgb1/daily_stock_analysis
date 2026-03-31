@@ -1217,6 +1217,11 @@ class SearXNGSearchProvider(BaseSearchProvider):
     searx.space and rotate across them with per-request failover.
     """
 
+    # ── 物理断路开关 ──────────────────────────────────────────────────────────
+    # 公共 SearXNG 实例持续触发 429 限流，全局禁用。
+    # 如需启用自建实例，将此值改为 False 并在配置中填入 searxng_base_urls。
+    _GLOBALLY_DISABLED: bool = True
+
     PUBLIC_INSTANCES_URL = "https://searx.space/data/instances.json"
     PUBLIC_INSTANCES_CACHE_TTL_SECONDS = 3600
     PUBLIC_INSTANCES_STALE_REFRESH_BACKOFF_SECONDS = 60
@@ -1239,6 +1244,8 @@ class SearXNGSearchProvider(BaseSearchProvider):
 
     @property
     def is_available(self) -> bool:
+        if self._GLOBALLY_DISABLED:
+            return False
         return bool(self._base_urls) or self._use_public_instances
 
     @classmethod
@@ -1536,6 +1543,15 @@ class SearXNGSearchProvider(BaseSearchProvider):
 
     def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
         """Execute SearXNG search with instance rotation and per-request failover."""
+        # 物理断路：全局禁用时立即返回，不发起任何网络请求
+        if self._GLOBALLY_DISABLED:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="SearXNG 已全局禁用（_GLOBALLY_DISABLED=True）",
+            )
         start_time = time.time()
         if self._base_urls:
             candidates = self._rotate_candidates(

@@ -113,11 +113,12 @@ def setup_logging(
 
     # 日志文件路径（按日期分文件）
     today_str = datetime.now().strftime('%Y%m%d')
-    log_file = log_path / f"{log_prefix}_{today_str}.log"
+    log_file       = log_path / f"{log_prefix}_{today_str}.log"
+    debug_log_file = log_path / f"{log_prefix}_{today_str}_debug.log"
 
-    # 配置根 logger
+    # 配置根 logger（设为 DEBUG，由各 handler 自行过滤，确保 debug 文件能收到全量日志）
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)
 
     # 清除已有 handler，避免重复添加
     if root_logger.handlers:
@@ -143,6 +144,18 @@ def setup_logging(
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(rel_formatter)
     root_logger.addHandler(file_handler)
+
+    # Handler 3: DEBUG 级别日志文件（10MB 轮转，保留 1 个备份）
+    # 文件名含 "_debug" 后缀，与 _read_physical_log(debug=True) 的过滤逻辑对齐
+    debug_file_handler = RotatingFileHandler(
+        debug_log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=1,
+        encoding='utf-8'
+    )
+    debug_file_handler.setLevel(logging.DEBUG)
+    debug_file_handler.setFormatter(rel_formatter)
+    root_logger.addHandler(debug_file_handler)
 
     # 降低第三方库的日志级别
     quiet_loggers = DEFAULT_QUIET_LOGGERS.copy()

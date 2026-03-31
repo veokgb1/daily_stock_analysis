@@ -1474,10 +1474,13 @@ def _read_physical_log(log_prefix: str, debug: bool = False, lines: int = 1000):
         ]
     except Exception:
         return None, b"", ""
+    # 按 log_prefix 过滤，避免误读其他进程（如 api_server）的日志文件
+    entries = [p for p in entries if os.path.basename(p).startswith(log_prefix)]
     if debug:
-        candidates = [p for p in entries if "debug" in os.path.basename(p).lower()]
+        # debug 日志文件：命名含 "_debug" 后缀（由 logging_config.py 的 Handler 3 写入）
+        candidates = [p for p in entries if "_debug" in os.path.basename(p).lower()]
     else:
-        candidates = [p for p in entries if "debug" not in os.path.basename(p).lower()]
+        candidates = [p for p in entries if "_debug" not in os.path.basename(p).lower()]
     candidates = [p for p in candidates if os.path.isfile(p)]
     path = max(candidates, key=os.path.getmtime) if candidates else None
     if not path:

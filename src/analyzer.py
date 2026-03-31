@@ -1809,6 +1809,18 @@ class GeminiAnalyzer:
                 # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
 
+                # 规范化 intelligence 列表字段：LLM 偶尔返回纯字符串而非列表，
+                # 必须在此最上游修复，否则下游 for 循环会逐字符遍历导致垂直排版
+                if isinstance(dashboard, dict):
+                    _intel = dashboard.get('intelligence')
+                    if isinstance(_intel, dict):
+                        for _list_key in ('positive_catalysts', 'risk_alerts', 'latest_news_list'):
+                            _v = _intel.get(_list_key)
+                            if isinstance(_v, str):
+                                _intel[_list_key] = [_v] if _v.strip() else []
+                            elif _v is not None and not isinstance(_v, list):
+                                _intel[_list_key] = []
+
                 # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
                 ai_stock_name = data.get('stock_name')
                 if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
