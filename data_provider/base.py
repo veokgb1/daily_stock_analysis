@@ -2236,8 +2236,14 @@ class DataFetcherManager:
             source_chain: List[Dict[str, Any]] = []
             last_error = ""
 
+            # 板块排行仅使用 AkShare；efinance 和 tushare 在云端频繁 Permission denied/超时，跳过
+            _SECTOR_SKIP_CLASSES = ("EfinanceFetcher", "TushareFetcher")
+
             # 直接遍历管理器已经按 priority 排好序的数据源列表
             for fetcher in self._fetchers:
+                if type(fetcher).__name__ in _SECTOR_SKIP_CLASSES:
+                    logger.debug("[板块排行] 跳过 %s（已禁用板块排行调用）", type(fetcher).__name__)
+                    continue
                 if not hasattr(fetcher, 'get_sector_rankings'):
                     continue
 

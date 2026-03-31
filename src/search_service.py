@@ -1650,12 +1650,13 @@ class AkshareNewsProvider(BaseSearchProvider):
 
         code = self._extract_code(query)
         if not code:
+            # 大盘/宏观 query 不含股票代码，静默跳过，不记为错误，让上层继续轮询其他 provider
             return SearchResponse(
                 query=query,
                 results=[],
                 provider=self.name,
-                success=False,
-                error_message="AkshareNewsProvider 仅支持包含 A 股代码的 query",
+                success=True,  # success=True 使调用方不记录错误，但 results 为空触发 fallback
+                error_message=None,
             )
 
         cutoff = datetime.now() - timedelta(days=days)
@@ -1829,17 +1830,16 @@ class SearchService:
             self._providers.append(MiniMaxSearchProvider(minimax_keys))
             logger.info(f"已配置 MiniMax 搜索，共 {len(minimax_keys)} 个 API Key")
 
-        # 6. SearXNG（自建实例优先；未配置时可自动发现公共实例）
-        searxng_provider = SearXNGSearchProvider(
-            searxng_base_urls,
-            use_public_instances=bool(searxng_public_instances_enabled and not searxng_base_urls),
-        )
-        if searxng_provider.is_available:
-            self._providers.append(searxng_provider)
-            if searxng_base_urls:
-                logger.info("已配置 SearXNG 搜索，共 %s 个自建实例", len(searxng_base_urls))
-            else:
-                logger.info("已启用 SearXNG 公共实例自动发现模式")
+        # 6. SearXNG — 已物理禁用（公共实例长期 429 限流，自建实例才允许注册）
+        # 仅当显式配置了自建 base_urls 时才挂载，彻底杜绝公共实例请求
+        if searxng_base_urls:
+            searxng_provider = SearXNGSearchProvider(
+                searxng_base_urls,
+                use_public_instances=False,  # 强制禁用公共实例，无论 searxng_public_instances_enabled
+            )
+            if searxng_provider.is_available:
+                self._providers.append(searxng_provider)
+                logger.info("已配置 SearXNG 自建实例搜索，共 %s 个", len(searxng_base_urls))
 
         # 7. Akshare 东方财富新闻（无 Key 兜底；仅限 A 股代码 query）
         _akshare_provider = AkshareNewsProvider()

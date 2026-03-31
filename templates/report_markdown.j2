@@ -33,14 +33,14 @@
 {% if intel.get('risk_alerts') %}
 
 **🚨 {{ labels.risk_alerts_label }}**:
-{% for alert in intel.risk_alerts %}
+{% for alert in ([intel.risk_alerts] if intel.risk_alerts is string else intel.risk_alerts) %}
 - {{ alert }}
 {% endfor %}
 {% endif %}
 {% if intel.get('positive_catalysts') %}
 
 **✨ {{ labels.positive_catalysts_label }}**:
-{% for cat in intel.positive_catalysts %}
+{% for cat in ([intel.positive_catalysts] if intel.positive_catalysts is string else intel.positive_catalysts) %}
 - {{ cat }}
 {% endfor %}
 {% endif %}

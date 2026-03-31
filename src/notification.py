@@ -16,8 +16,17 @@ A股自选股智能分析系统 - 通知层
 """
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 from enum import Enum
+
+
+def _ensure_list(value: Any) -> list:
+    """将 LLM 可能返回的字符串强制转换为列表，防止 for 循环逐字符遍历。"""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return []
 
 from src.config import get_config
 from src.analyzer import AnalysisResult
@@ -876,14 +885,14 @@ class NotificationService(
                     if intel.get('earnings_outlook'):
                         report_lines.append(f"**📊 {labels['earnings_outlook_label']}**: {intel['earnings_outlook']}")
                     # 风险警报（醒目显示）
-                    risk_alerts = intel.get('risk_alerts', [])
+                    risk_alerts = _ensure_list(intel.get('risk_alerts', []))
                     if risk_alerts:
                         report_lines.append("")
                         report_lines.append(f"**🚨 {labels['risk_alerts_label']}**:")
                         for alert in risk_alerts:
                             report_lines.append(f"- {alert}")
                     # 利好催化
-                    catalysts = intel.get('positive_catalysts', [])
+                    catalysts = _ensure_list(intel.get('positive_catalysts', []))
                     if catalysts:
                         report_lines.append("")
                         report_lines.append(f"**✨ {labels['positive_catalysts_label']}**:")
@@ -1161,7 +1170,7 @@ class NotificationService(
                     lines.append("")
                 
                 # 风险警报（最重要，醒目显示）
-                risks = intel.get('risk_alerts', []) if intel else []
+                risks = _ensure_list(intel.get('risk_alerts', []) if intel else [])
                 if risks:
                     lines.append(f"🚨 **{labels['risk_alerts_label']}**:")
                     for risk in risks[:2]:  # 最多显示2条
@@ -1171,7 +1180,7 @@ class NotificationService(
                     lines.append("")
                 
                 # 利好催化
-                catalysts = intel.get('positive_catalysts', []) if intel else []
+                catalysts = _ensure_list(intel.get('positive_catalysts', []) if intel else [])
                 if catalysts:
                     lines.append(f"✨ **{labels['positive_catalysts_label']}**:")
                     for cat in catalysts[:2]:  # 最多显示2条
@@ -1427,7 +1436,7 @@ class NotificationService(
                 lines.append(f"💭 **{labels['sentiment_summary_label']}**: {str(intel['sentiment_summary'])[:80]}")
             
             # 风险警报
-            risks = intel.get('risk_alerts', [])
+            risks = _ensure_list(intel.get('risk_alerts', []))
             if risks:
                 if not info_added:
                     lines.append(f"### 📰 {labels['info_heading']}")
@@ -1437,9 +1446,9 @@ class NotificationService(
                 lines.append(f"🚨 **{labels['risk_alerts_label']}**:")
                 for risk in risks[:3]:
                     lines.append(f"- {str(risk)[:60]}")
-            
+
             # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
+            catalysts = _ensure_list(intel.get('positive_catalysts', []))
             if catalysts:
                 lines.append("")
                 lines.append(f"✨ **{labels['positive_catalysts_label']}**:")

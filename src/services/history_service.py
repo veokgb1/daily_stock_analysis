@@ -15,6 +15,15 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
+
+def _ensure_list(value: Any) -> list:
+    """将 LLM 可能返回的字符串强制转换为列表，防止 for 循环逐字符遍历。"""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return []
+
 from src.config import get_config, resolve_news_window_days
 from src.report_language import (
     get_bias_status_emoji,
@@ -620,14 +629,14 @@ class HistoryService:
             if intel.get('earnings_outlook'):
                 report_lines.append(f"**📊 {labels['earnings_outlook_label']}**: {intel['earnings_outlook']}")
             # 风险警报（醒目显示）
-            risk_alerts = intel.get('risk_alerts', [])
+            risk_alerts = _ensure_list(intel.get('risk_alerts', []))
             if risk_alerts:
                 report_lines.append("")
                 report_lines.append(f"**🚨 {labels['risk_alerts_label']}**:")
                 for alert in risk_alerts:
                     report_lines.append(f"- {alert}")
             # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
+            catalysts = _ensure_list(intel.get('positive_catalysts', []))
             if catalysts:
                 report_lines.append("")
                 report_lines.append(f"**✨ {labels['positive_catalysts_label']}**:")
