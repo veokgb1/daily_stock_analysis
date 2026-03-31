@@ -339,7 +339,7 @@ class AkshareFundamentalAdapter:
                     result["earnings"]["financial_report"] = financial_report_payload
                 result["source_chain"].append(f"growth:{fin_source}")
 
-        # Earnings forecast
+        # Earnings forecast（AkShare 东财预告）
         forecast_df, forecast_source, forecast_errors = self._call_df_candidates([
             ("stock_yjyg_em", {"symbol": stock_code}),
             ("stock_yjyg_em", {}),
@@ -354,6 +354,44 @@ class AkshareFundamentalAdapter:
                     _pick_by_keywords(row, ["预告", "业绩变动", "内容", "摘要", "公告"])
                 )[:200]
                 result["source_chain"].append(f"earnings_forecast:{forecast_source}")
+
+        # Earnings forecast（Tushare forecast API 补充）
+        try:
+            from src.config import get_config as _get_cfg
+            _cfg = _get_cfg()
+            _ts_token = getattr(_cfg, "tushare_token", None)
+            if _ts_token:
+                import tushare as _ts
+                _pro = _ts.pro_api(_ts_token)
+                # ts_code 格式：600519.SH / 000001.SZ
+                _ts_code = (
+                    f"{stock_code}.SH" if stock_code.startswith("6")
+                    else f"{stock_code}.SZ" if stock_code.startswith(("0", "3"))
+                    else None
+                )
+                if _ts_code:
+                    _fc_df = _pro.forecast(ts_code=_ts_code, fields="ann_date,type,p_change_min,p_change_max,net_profit_min,net_profit_max,summary")
+                    if _fc_df is not None and not _fc_df.empty:
+                        _fc_row = _fc_df.iloc[0]
+                        _summary = str(_fc_row.get("summary", "")).strip()
+                        _p_min   = _fc_row.get("p_change_min")
+                        _p_max   = _fc_row.get("p_change_max")
+                        _ann     = str(_fc_row.get("ann_date", "")).strip()
+                        _fc_type = str(_fc_row.get("type", "")).strip()
+                        _ts_forecast_text = ""
+                        if _p_min is not None and _p_max is not None:
+                            _ts_forecast_text += f"预计净利润变动幅度：{_p_min}% ~ {_p_max}%；"
+                        if _fc_type:
+                            _ts_forecast_text += f"业绩类型：{_fc_type}；"
+                        if _summary:
+                            _ts_forecast_text += _summary
+                        if _ann:
+                            _ts_forecast_text = f"（公告日 {_ann}）" + _ts_forecast_text
+                        if _ts_forecast_text:
+                            result["earnings"]["tushare_forecast"] = _ts_forecast_text[:300]
+                            result["source_chain"].append("earnings_forecast:tushare")
+        except Exception as _ts_exc:
+            logger.debug("Tushare forecast 获取失败（不影响主流程）: %s", _ts_exc)
 
         # Earnings quick report
         quick_df, quick_source, quick_errors = self._call_df_candidates([

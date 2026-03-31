@@ -1612,10 +1612,124 @@ class SearXNGSearchProvider(BaseSearchProvider):
         )
 
 
+class AkshareNewsProvider(BaseSearchProvider):
+    """
+    Akshare 东方财富新闻提供者（无需 API Key）
+
+    特点：
+    - 基于 akshare ak.stock_news_em() 获取个股新闻
+    - 完全免费，无 Key 限制
+    - 仅支持 A 股代码；非 A 股 query 直接返回空
+    - 作为搜索服务最后兜底数据源
+
+    注意：query 中若包含 6 位 A 股代码则精确拉取；否则尝试中文名匹配
+    """
+
+    _DUMMY_KEY = "__akshare__"
+
+    def __init__(self):
+        super().__init__([self._DUMMY_KEY], "AkshareEastMoney")
+
+    @property
+    def is_available(self) -> bool:
+        try:
+            import akshare  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _extract_code(self, query: str) -> Optional[str]:
+        """从 query 中提取 6 位数字股票代码"""
+        m = re.search(r'\b([036]\d{5}|[68]\d{5})\b', query)
+        return m.group(1) if m else None
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        """从东方财富拉取个股新闻并包装为 SearchResponse"""
+        import akshare as ak
+        from datetime import datetime, timedelta
+
+        code = self._extract_code(query)
+        if not code:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="AkshareNewsProvider 仅支持包含 A 股代码的 query",
+            )
+
+        cutoff = datetime.now() - timedelta(days=days)
+        try:
+            df = ak.stock_news_em(symbol=code)
+        except Exception as exc:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"ak.stock_news_em 调用失败: {exc}",
+            )
+
+        if df is None or df.empty:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"东方财富未返回 {code} 的新闻",
+            )
+
+        results: List[SearchResult] = []
+        # 尝试自动识别列名
+        col_title   = next((c for c in df.columns if "标题" in c or "title" in c.lower()), df.columns[0] if len(df.columns) > 0 else None)
+        col_content = next((c for c in df.columns if "内容" in c or "摘要" in c or "content" in c.lower()), None)
+        col_date    = next((c for c in df.columns if "时间" in c or "日期" in c or "date" in c.lower()), None)
+        col_url     = next((c for c in df.columns if "链接" in c or "url" in c.lower() or "网址" in c), None)
+
+        for _, row in df.iterrows():
+            try:
+                title   = str(row[col_title]).strip() if col_title else ""
+                snippet = str(row[col_content]).strip()[:300] if col_content and row.get(col_content) else title
+                url     = str(row[col_url]).strip() if col_url and row.get(col_url) else ""
+                pub_raw = str(row[col_date]).strip() if col_date and row.get(col_date) else ""
+
+                # 时效过滤
+                if pub_raw:
+                    try:
+                        pub_dt = datetime.fromisoformat(pub_raw[:19])
+                        if pub_dt < cutoff:
+                            continue
+                    except ValueError:
+                        pass
+
+                if not title:
+                    continue
+
+                results.append(SearchResult(
+                    title=title,
+                    snippet=snippet,
+                    url=url,
+                    source="东方财富",
+                    published_date=pub_raw[:19] if pub_raw else None,
+                ))
+                if len(results) >= max_results:
+                    break
+            except Exception:
+                continue
+
+        return SearchResponse(
+            query=query,
+            results=results,
+            provider=self.name,
+            success=bool(results),
+            error_message=None if results else f"东方财富 {code} 新闻在时效窗口内为空（days={days}）",
+        )
+
+
 class SearchService:
     """
     搜索服务
-    
+
     功能：
     1. 管理多个搜索引擎
     2. 自动故障转移
@@ -1726,6 +1840,14 @@ class SearchService:
                 logger.info("已配置 SearXNG 搜索，共 %s 个自建实例", len(searxng_base_urls))
             else:
                 logger.info("已启用 SearXNG 公共实例自动发现模式")
+
+        # 7. Akshare 东方财富新闻（无 Key 兜底；仅限 A 股代码 query）
+        _akshare_provider = AkshareNewsProvider()
+        if _akshare_provider.is_available:
+            self._providers.append(_akshare_provider)
+            logger.info("已挂载 AkshareNewsProvider 作为零配置新闻兜底数据源")
+        else:
+            logger.warning("akshare 未安装，AkshareNewsProvider 不可用；如需启用请 pip install akshare")
 
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")

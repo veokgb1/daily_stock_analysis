@@ -398,9 +398,9 @@ class EfinanceFetcher(BaseFetcher):
     def _fetch_stock_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         获取普通 A 股历史数据
-        
+
         数据来源：ef.stock.get_quote_history()
-        
+
         API 参数说明：
         - stock_codes: 股票代码
         - beg: 开始日期，格式 'YYYYMMDD'
@@ -408,6 +408,10 @@ class EfinanceFetcher(BaseFetcher):
         - klt: 周期，101=日线
         - fqt: 复权方式，1=前复权
         """
+        # 若设置 EFINANCE_DISABLED=true 则立即跳过，避免云端权限错误
+        if os.environ.get("EFINANCE_DISABLED", "").lower() in ("1", "true", "yes"):
+            raise DataFetchError(f"efinance 已通过 EFINANCE_DISABLED 环境变量禁用，跳过 {stock_code}")
+
         import efinance as ef
         
         # 防封禁策略 1: 随机 User-Agent
@@ -498,6 +502,10 @@ class EfinanceFetcher(BaseFetcher):
         Returns:
             ETF historical OHLCV DataFrame
         """
+        # 若设置 EFINANCE_DISABLED=true 则立即跳过，避免云端权限错误
+        if os.environ.get("EFINANCE_DISABLED", "").lower() in ("1", "true", "yes"):
+            raise DataFetchError(f"efinance 已通过 EFINANCE_DISABLED 环境变量禁用，跳过 {stock_code} (ETF)")
+
         import efinance as ef
 
         # Anti-ban strategy 1: random User-Agent

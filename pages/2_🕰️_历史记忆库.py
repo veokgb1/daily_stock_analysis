@@ -2,11 +2,14 @@
 """
 历史记忆库 v4 · 管理全入侧边栏 · 红多绿空配色本土化 · 日志链路修复
 """
+import logging
 import os
 import re
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -811,6 +814,105 @@ with d5:
     )
     if not t:
         st.caption("暂无")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 原地重跑与对比沙盒
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.divider()
+
+_rerun_key         = f"rerun_trigger_{selected_run_id}"
+_rerun_results_key = f"rerun_results_{selected_run_id}"
+_rerun_codes       = [s.get("code") for s in stock_snaps if s.get("code")]
+
+with st.expander("🔄 原地重跑与对比沙盒", expanded=False):
+    if _rerun_codes:
+        if st.button(
+            f"🔄 基于此批次 {len(_rerun_codes)} 只股票重新分析",
+            key=f"btn_{_rerun_key}",
+            use_container_width=True,
+        ):
+            st.session_state[_rerun_key] = True
+            st.rerun()
+    else:
+        st.info("此批次无个股记录，无法重跑。")
+
+    if st.session_state.get(_rerun_key):
+        _new_reports: Dict[str, str] = {}
+        with st.status("🔄 正在重新分析，请稍候…", expanded=True) as _rerun_status:
+            try:
+                import uuid as _uuid
+                from src.core.pipeline import StockAnalysisPipeline
+                from src.config import get_config as _get_rerun_cfg
+                _cfg_r   = _get_rerun_cfg()
+                _total_r = len(_rerun_codes)
+                for _idx_r, _code_r in enumerate(_rerun_codes, 1):
+                    _snap_r = next(
+                        (s for s in stock_snaps if s.get("code") == _code_r), {}
+                    )
+                    _name_r = _norm(_snap_r.get("name")) or _code_r
+                    _rerun_status.write(
+                        f"[{_idx_r}/{_total_r}] 📡 拉取数据：**{_name_r}**（{_code_r}）…"
+                    )
+                    try:
+                        _w_r = StockAnalysisPipeline(
+                            config=_cfg_r,
+                            max_workers=1,
+                            query_source="history_rerun",
+                            save_context_snapshot=False,
+                        )
+                        _w_r.fetch_and_save_stock_data(_code_r)
+                        _rerun_status.write(
+                            f"[{_idx_r}/{_total_r}] 🤖 生成报告：**{_name_r}**（{_code_r}）…"
+                        )
+                        _r_r = _w_r.analyze_stock(_code_r, query_id=_uuid.uuid4().hex)
+                        _new_reports[_code_r] = (
+                            _w_r.notifier.generate_single_stock_report(_r_r)
+                            if _r_r else ""
+                        )
+                    except Exception as _exc_r:
+                        logger.warning("重跑 %s 失败: %s", _code_r, _exc_r)
+                        _new_reports[_code_r] = f"❌ 重跑失败：{_exc_r}"
+                _rerun_status.update(
+                    label=f"✅ 重新分析完成，共 {len(_new_reports)} 只",
+                    state="complete",
+                    expanded=False,
+                )
+            except Exception as _top_exc:
+                _rerun_status.update(
+                    label=f"❌ 重跑顶层异常：{_top_exc}",
+                    state="error",
+                    expanded=True,
+                )
+        st.session_state[_rerun_results_key] = _new_reports
+        st.session_state[_rerun_key] = False
+        st.rerun()
+
+    _rerun_results: Dict[str, str] = st.session_state.get(_rerun_results_key, {})
+    if _rerun_results:
+        st.markdown("### 📊 历史 vs 最新 对比视图")
+        for _snap_cmp in stock_snaps:
+            _c_cmp  = _snap_cmp.get("code")
+            if not _c_cmp:
+                continue
+            _old_cmp = _norm(_snap_cmp.get("report_md"))
+            _new_cmp = _rerun_results.get(_c_cmp, "")
+            _n_cmp   = _norm(_snap_cmp.get("name")) or _c_cmp
+            st.markdown(f"#### {_n_cmp}（{_c_cmp}）")
+            _col_old, _col_new = st.columns(2)
+            with _col_old:
+                st.markdown("**📋 历史报告**")
+                st.markdown(_old_cmp or "_暂无历史报告_")
+            with _col_new:
+                st.markdown(
+                    '<div style="background:rgba(34,197,94,0.08);border:1px solid #22c55e;'
+                    'border-radius:8px;padding:5px 12px;margin-bottom:8px;">'
+                    '🆕 <b>最新测试版</b></div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_new_cmp or "_未生成新报告_")
+            st.divider()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -598,7 +598,7 @@ class Config:
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
     searxng_base_urls: List[str] = field(default_factory=list)  # SearXNG instance URLs (self-hosted, no quota)
-    searxng_public_instances_enabled: bool = True  # Auto-discover public SearXNG instances when base URLs are absent
+    searxng_public_instances_enabled: bool = False  # Auto-discover public SearXNG instances when base URLs are absent（已默认禁用：公共实例长期触发 429 限流）
 
     # === Social Sentiment (US stocks only, api.adanos.org) ===
     social_sentiment_api_key: Optional[str] = None
